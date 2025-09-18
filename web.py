@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db import Database, Item, Provider
+from db import Database, Item, Provider, Snapshot
 
 
 CONFIG_PATH = Path("config.yml")
@@ -40,6 +40,47 @@ def _normalize_numeric(value: Optional[Any]) -> Optional[int]:
     if value is None:
         return None
     return int(round(float(value)))
+
+
+SNAPSHOT_FIELDS = [
+    ("title", "Titel"),
+    ("direct_buy", "Direkt kaufen"),
+    ("vb_flag", "Verhandlung"),
+    ("buyout_cents", "Sofortpreis"),
+    ("bid_cents", "Gebotspreis"),
+]
+
+
+def _display_snapshot_field(field: str, snapshot: Optional[Snapshot]) -> str:
+    if snapshot is None:
+        return "–"
+    value = getattr(snapshot, field, None)
+    if field.endswith("_cents"):
+        return _cents_to_eur(value)
+    if field in {"direct_buy", "vb_flag"}:
+        return "Ja" if value else "Nein"
+    if value is None or value == "":
+        return "–"
+    return str(value)
+
+
+def _snapshot_changes(current: Snapshot, previous: Optional[Snapshot]):
+    changes = []
+    if not previous:
+        return changes
+    for field, label in SNAPSHOT_FIELDS:
+        current_val = getattr(current, field, None)
+        previous_val = getattr(previous, field, None)
+        if current_val != previous_val:
+            changes.append(
+                {
+                    "field": field,
+                    "label": label,
+                    "previous": _display_snapshot_field(field, previous),
+                    "current": _display_snapshot_field(field, current),
+                }
+            )
+    return changes
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -209,6 +250,101 @@ async def clusters_view(
         "now": datetime.now(timezone.utc),
     }
     return templates.TemplateResponse("clusters.html", context)
+
+
+@app.get("/items/{item_id}", response_class=HTMLResponse)
+async def item_detail(
+    request: Request,
+    item_id: int,
+    snapshot_id: Optional[int] = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    stmt = (
+        select(
+            Item,
+            Provider.label.label("provider_label"),
+        )
+        .join(Provider, Provider.key == Item.provider_key)
+        .where(Item.id == item_id)
+    )
+    result = await session.execute(stmt)
+    row = result.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Item nicht gefunden")
+
+    item_obj: Item = row.Item
+    provider_label = row.provider_label
+
+    snapshot_stmt = (
+        select(Snapshot)
+        .where(Snapshot.item_id == item_id)
+        .order_by(Snapshot.observed_ts.desc())
+    )
+    snapshot_rows = await session.execute(snapshot_stmt)
+    snapshots = snapshot_rows.scalars().all()
+    if not snapshots:
+        raise HTTPException(status_code=404, detail="Keine Historie vorhanden")
+
+    selected_snapshot = None
+    if snapshot_id is not None:
+        for snap in snapshots:
+            if snap.id == snapshot_id:
+                selected_snapshot = snap
+                break
+    if selected_snapshot is None:
+        selected_snapshot = snapshots[0]
+
+    selected_index = snapshots.index(selected_snapshot)
+    previous_snapshot = snapshots[selected_index + 1] if selected_index + 1 < len(snapshots) else None
+
+    snapshot_view_models = []
+    for idx, snap in enumerate(snapshots):
+        prev = snapshots[idx + 1] if idx + 1 < len(snapshots) else None
+        changes = _snapshot_changes(snap, prev)
+        snapshot_view_models.append(
+            {
+                "id": snap.id,
+                "observed_ts": snap.observed_ts,
+                "buyout": _cents_to_eur(snap.buyout_cents),
+                "bid": _cents_to_eur(snap.bid_cents),
+                "changes": changes,
+                "is_selected": snap.id == selected_snapshot.id,
+            }
+        )
+
+    selected_changes = _snapshot_changes(selected_snapshot, previous_snapshot)
+
+    detail_rows = []
+    for field, label in SNAPSHOT_FIELDS:
+        current_value = _display_snapshot_field(field, selected_snapshot)
+        previous_value = _display_snapshot_field(field, previous_snapshot) if previous_snapshot else "–"
+        change_entry = next((c for c in selected_changes if c["field"] == field), None)
+        detail_rows.append(
+            {
+                "field": field,
+                "label": label,
+                "current": current_value,
+                "previous": change_entry["previous"] if change_entry else previous_value,
+                "changed": change_entry is not None,
+            }
+        )
+
+    item_payload = _serialize_item(item_obj, provider_label)
+
+    context = {
+        "request": request,
+        "item": item_payload,
+        "snapshots": snapshot_view_models,
+        "selected_snapshot": {
+            "id": selected_snapshot.id,
+            "observed_ts": selected_snapshot.observed_ts,
+        },
+        "detail_rows": detail_rows,
+        "selected_changes": selected_changes,
+        "now": datetime.now(timezone.utc),
+    }
+
+    return templates.TemplateResponse("item_detail.html", context)
 
 
 @app.get("/api/items", response_class=JSONResponse)

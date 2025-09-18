@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Verlauf – {{ item.title }}{% endblock %}
+
+{% block content %}
+    <a href="/" class="back-link">← Zurück zur Übersicht</a>
+    <header class="item-header">
+        <h2>{{ item.title }}</h2>
+        <div class="muted">{{ item.provider }} · ID {{ item.provider_item_id }}</div>
+        <div class="item-links">
+            <a href="{{ item.href }}" target="_blank" rel="noopener">🔗 Angebotsseite</a>
+        </div>
+    </header>
+
+    <div class="detail-grid">
+        <aside class="snapshot-list">
+            <h3>Historie</h3>
+            <ul>
+                {% for snap in snapshots %}
+                <li class="{% if snap.is_selected %}active{% endif %}">
+                    <a href="?snapshot_id={{ snap.id }}">
+                        <div class="snapshot-time">{{ snap.observed_ts.strftime('%Y-%m-%d %H:%M') }}</div>
+                        <div class="snapshot-prices">
+                            {% if snap.buyout != '-' %}<span>💶 {{ snap.buyout }}</span>{% endif %}
+                            {% if snap.bid != '-' %}<span>🪙 {{ snap.bid }}</span>{% endif %}
+                        </div>
+                        {% if snap.changes %}
+                        <div class="snapshot-changes">
+                            {% for change in snap.changes %}
+                                <span class="badge delta">Δ {{ change.label }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+        </aside>
+
+        <section class="snapshot-detail">
+            <h3>Snapshot vom {{ selected_snapshot.observed_ts.strftime('%Y-%m-%d %H:%M') }}</h3>
+            <div class="field-grid">
+                {% for row in detail_rows %}
+                <div class="field-row {% if row.changed %}changed{% endif %}">
+                    <div class="field-label">{{ row.label }}</div>
+                    <div class="field-current">{{ row.current }}</div>
+                    {% if row.changed and row.previous and row.previous != row.current %}
+                        <div class="field-previous">vorher: {{ row.previous }}</div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+{% endblock %}

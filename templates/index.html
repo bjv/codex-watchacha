@@ -33,7 +33,7 @@
         </label>
         <div style="display:flex; align-items:flex-end; gap:8px;">
             <a href="/" title="Filter zurücksetzen" style="display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:999px; background:rgba(255,255,255,0.08); text-decoration:none; color:var(--accent); font-size:1.2rem; line-height:1;">❌</a>
-            <button type="submit">Filter anwenden</button>
+            <button type="submit" title="Filter anwenden">🔍</button>
         </div>
     </form>
 
@@ -57,7 +57,8 @@
                     <small class="muted">{{ item.provider_item_id }}</small>
                 </td>
                 <td>
-                    <a href="{{ item.href }}" target="_blank" rel="noopener">{{ item.title }}</a>
+                    <a href="/items/{{ item.id }}">{{ item.title }}</a>
+                    <small><a href="{{ item.href }}" target="_blank" rel="noopener" class="muted">🔗 Direktlink</a></small>
                 </td>
                 <td>
                     <div>

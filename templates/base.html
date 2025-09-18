@@ -117,8 +117,129 @@
             color: var(--accent);
             margin-right: 6px;
         }
+        .badge.delta {
+            background: rgba(255, 170, 0, 0.2);
+            color: #ffcf66;
+        }
         .muted {
             color: var(--muted);
+        }
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 16px;
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .item-header {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 24px;
+        }
+        .item-header .item-links a {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .detail-grid {
+            display: grid;
+            grid-template-columns: minmax(240px, 280px) 1fr;
+            gap: 24px;
+            align-items: flex-start;
+        }
+        .snapshot-list {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 16px;
+        }
+        .snapshot-list h3 {
+            margin: 0;
+            font-size: 1rem;
+        }
+        .snapshot-list ul {
+            list-style: none;
+            margin: 12px 0 0 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .snapshot-list li a {
+            display: block;
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            text-decoration: none;
+            color: inherit;
+            background: rgba(0, 0, 0, 0.2);
+            transition: border-color 0.2s ease, background 0.2s ease;
+        }
+        .snapshot-list li a:hover {
+            border-color: rgba(0, 153, 255, 0.4);
+        }
+        .snapshot-list li.active a {
+            border-color: rgba(0, 153, 255, 0.6);
+            background: rgba(0, 153, 255, 0.18);
+        }
+        .snapshot-time {
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+        .snapshot-prices {
+            margin-top: 4px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            font-size: 0.85rem;
+        }
+        .snapshot-changes {
+            margin-top: 6px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .snapshot-detail {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .snapshot-detail h3 {
+            margin-top: 0;
+        }
+        .field-grid {
+            display: grid;
+            gap: 12px;
+        }
+        .field-row {
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            background: rgba(0, 0, 0, 0.25);
+        }
+        .field-row.changed {
+            border-color: rgba(0, 153, 255, 0.45);
+            box-shadow: 0 0 0 1px rgba(0, 153, 255, 0.2);
+        }
+        .field-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+        .field-current {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+        .field-previous {
+            margin-top: 4px;
+            font-size: 0.8rem;
+            color: #ffcf66;
         }
         footer {
             margin-top: 48px;
@@ -144,6 +265,9 @@
             }
             th, td {
                 padding: 8px;
+            }
+            .detail-grid {
+                grid-template-columns: 1fr;
             }
         }
     </style>
