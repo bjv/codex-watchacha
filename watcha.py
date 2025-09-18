@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Tuple, Callable, Optional
 
 import yaml, httpx
 
-from db import Database, compile_cluster_patterns, extract_cluster_key
+from db import Database, compile_cluster_patterns, extract_cluster_keys
 from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 
 # =========================
@@ -448,14 +448,14 @@ async def run_once(browser, cfg, database: Database, cluster_patterns):
                 for it in items:
                     if not it.get("id"):
                         continue
-                    cluster_key = extract_cluster_key(it.get("title", ""), cluster_patterns)
-                    if cluster_key:
-                        it["cluster_key"] = cluster_key
+                    cluster_keys = extract_cluster_keys(it.get("title", ""), cluster_patterns)
+                    if cluster_keys:
+                        it["cluster_keys"] = cluster_keys
                     payload = {
                         "provider_item_id": str(it.get("id")),
                         "title": it.get("title", ""),
                         "href": it.get("href", ""),
-                        "cluster_key": cluster_key,
+                        "cluster_keys": cluster_keys,
                         "direct_buy": bool(it.get("direct_buy")),
                         "vb_flag": bool(it.get("vb_flag")),
                         "bid_cents": it.get("bid_cents"),

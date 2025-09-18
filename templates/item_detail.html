@@ -10,6 +10,13 @@
         <div class="item-links">
             <a href="{{ item.href }}" target="_blank" rel="noopener">🔗 Angebotsseite</a>
         </div>
+        {% if item.cluster_keys %}
+        <div class="cluster-badges">
+            {% for ck in item.cluster_keys %}
+                <span class="badge">{{ ck }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
     </header>
 
     <div class="detail-grid">

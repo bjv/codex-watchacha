@@ -11,6 +11,12 @@
             --fg: #f5f7fa;
             --accent: #0099ff;
             --muted: #738091;
+            --col-provider: 130px;
+            --col-title: auto;
+            --col-price: 120px;
+            --col-flags: 110px;
+            --col-cluster: 160px;
+            --col-seen: 160px;
             font-family: "Inter", "Segoe UI", system-ui, sans-serif;
         }
         body {
@@ -81,18 +87,53 @@
         table {
             width: 100%;
             border-collapse: collapse;
+            table-layout: fixed;
         }
         th, td {
             padding: 10px 12px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
             text-align: left;
             vertical-align: top;
+            overflow-wrap: anywhere;
         }
         th {
             font-size: 0.8rem;
             text-transform: uppercase;
             letter-spacing: 0.08em;
             color: var(--muted);
+        }
+        th .sortable {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: inherit;
+            text-decoration: none;
+        }
+        th .sortable.active {
+            color: var(--accent);
+            font-weight: 600;
+        }
+        .col-provider {
+            width: var(--col-provider);
+            white-space: nowrap;
+        }
+        .col-title {
+            width: var(--col-title);
+        }
+        .col-price {
+            width: var(--col-price);
+            white-space: nowrap;
+        }
+        .col-flags {
+            width: var(--col-flags);
+            white-space: nowrap;
+        }
+        .col-cluster {
+            width: var(--col-cluster);
+        }
+        .col-seen {
+            width: var(--col-seen);
+            white-space: nowrap;
         }
         tr:hover {
             background: rgba(255, 255, 255, 0.04);
@@ -143,6 +184,12 @@
             color: var(--accent);
             text-decoration: none;
             font-weight: 500;
+        }
+        .cluster-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
         }
         .detail-grid {
             display: grid;

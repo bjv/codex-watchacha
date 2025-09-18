@@ -10,8 +10,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from db import Database, Item, Provider, Snapshot
+from db import Database, Item, Provider, Snapshot, Cluster, item_clusters_table
+from urllib.parse import urlencode
 
 
 CONFIG_PATH = Path("config.yml")
@@ -49,6 +51,25 @@ SNAPSHOT_FIELDS = [
     ("buyout_cents", "Sofortpreis"),
     ("bid_cents", "Gebotspreis"),
 ]
+
+
+SORT_CONFIGS = {
+    "title": {
+        "label": "Listing",
+        "asc": [Item.title.asc(), Item.id.asc()],
+        "desc": [Item.title.desc(), Item.id.desc()],
+    },
+    "price": {
+        "label": "Preis",
+        "asc": [func.coalesce(Item.current_buyout_cents, Item.current_bid_cents).asc(), Item.id.asc()],
+        "desc": [func.coalesce(Item.current_buyout_cents, Item.current_bid_cents).desc(), Item.id.desc()],
+    },
+    "last_seen": {
+        "label": "Gesehen",
+        "asc": [Item.last_seen_ts.asc(), Item.id.asc()],
+        "desc": [Item.last_seen_ts.desc(), Item.id.desc()],
+    },
+}
 
 
 def _display_snapshot_field(field: str, snapshot: Optional[Snapshot]) -> str:
@@ -115,8 +136,8 @@ def _base_items_query() -> Select[Any]:
             Item,
             Provider.label.label("provider_label"),
         )
+        .options(selectinload(Item.clusters))
         .join(Provider, Provider.key == Item.provider_key)
-        .order_by(Item.last_seen_ts.desc())
     )
 
 
@@ -138,7 +159,16 @@ def _apply_item_filters(
     if provider:
         stmt = stmt.where(Item.provider_key == provider)
     if cluster:
-        stmt = stmt.where(Item.cluster_key == cluster)
+        cluster_exists = (
+            select(1)
+            .select_from(item_clusters_table)
+            .where(
+                item_clusters_table.c.item_id == Item.id,
+                item_clusters_table.c.cluster_key == cluster,
+            )
+            .correlate(Item)
+        )
+        stmt = stmt.where(cluster_exists.exists())
     return stmt
 
 
@@ -150,7 +180,7 @@ def _serialize_item(item: Item, provider_label: str) -> Dict[str, Any]:
         "provider_key": item.provider_key,
         "title": item.title,
         "href": item.href,
-        "cluster_key": item.cluster_key,
+        "cluster_keys": sorted(cluster.cluster_key for cluster in item.clusters),
         "direct_buy": bool(item.direct_buy),
         "vb_flag": bool(item.vb_flag),
         "current_bid_cents": item.current_bid_cents,
@@ -160,7 +190,23 @@ def _serialize_item(item: Item, provider_label: str) -> Dict[str, Any]:
         "currency": item.currency,
         "first_seen_ts": item.first_seen_ts,
         "last_seen_ts": item.last_seen_ts,
+        "best_price_cents": _lowest_price(item),
+        "best_price": _cents_to_eur(_lowest_price(item)),
     }
+
+
+def _lowest_price(item: Item) -> Optional[int]:
+    prices = [p for p in (item.current_buyout_cents, item.current_bid_cents) if p is not None]
+    return min(prices) if prices else None
+
+
+def _apply_sort(stmt: Select[Any], sort_by: Optional[str], sort_dir: Optional[str]) -> Select[Any]:
+    if sort_by in SORT_CONFIGS and sort_dir in {"asc", "desc"}:
+        config = SORT_CONFIGS[sort_by]
+        return stmt.order_by(*config[sort_dir])
+
+    default = SORT_CONFIGS["last_seen"]
+    return stmt.order_by(*default["desc"])
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -172,7 +218,16 @@ async def index(
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
+    sort_by = request.query_params.get("sort_by")
+    sort_dir = request.query_params.get("sort_dir")
+    if sort_by not in SORT_CONFIGS:
+        sort_by = None
+        sort_dir = None
+    elif sort_dir not in {"asc", "desc"}:
+        sort_dir = "desc"
+
     stmt = _apply_item_filters(_base_items_query(), query=q, provider=provider, cluster=cluster)
+    stmt = _apply_sort(stmt, sort_by, sort_dir)
     stmt = stmt.limit(limit)
     result = await session.execute(stmt)
     rows = result.all()
@@ -180,9 +235,42 @@ async def index(
 
     providers = await _fetch_providers(session)
 
-    cluster_stmt = select(Item.cluster_key).where(Item.cluster_key.isnot(None)).distinct().order_by(Item.cluster_key)
+    cluster_stmt = (
+        select(Cluster.cluster_key)
+        .join(item_clusters_table, item_clusters_table.c.cluster_key == Cluster.cluster_key)
+        .distinct()
+        .order_by(Cluster.cluster_key)
+    )
     cluster_result = await session.execute(cluster_stmt)
     clusters = [row[0] for row in cluster_result.all()]
+
+    base_params = [(k, v) for k, v in request.query_params.multi_items() if k not in {"sort_by", "sort_dir"}]
+
+    sort_state: Dict[str, Dict[str, Optional[str]]] = {}
+    for key, config in SORT_CONFIGS.items():
+        current_dir = sort_dir if sort_by == key else None
+        if sort_by == key:
+            if sort_dir == "desc":
+                next_dir = "asc"
+            elif sort_dir == "asc":
+                next_dir = None
+            else:
+                next_dir = "desc"
+        else:
+            next_dir = "desc"
+
+        params = list(base_params)
+        if next_dir:
+            params.extend([("sort_by", key), ("sort_dir", next_dir)])
+        query_str = urlencode(params)
+        url = request.url.path if not query_str else f"{request.url.path}?{query_str}"
+
+        sort_state[key] = {
+            "current": current_dir,
+            "next": next_dir,
+            "url": url,
+            "label": config["label"],
+        }
 
     context = {
         "request": request,
@@ -193,6 +281,9 @@ async def index(
         "clusters": clusters,
         "cluster_filter": cluster or "",
         "limit": limit,
+        "sort_by": sort_by,
+        "sort_dir": sort_dir,
+        "sort_state": sort_state,
         "now": datetime.now(timezone.utc),
     }
     return templates.TemplateResponse("index.html", context)
@@ -208,15 +299,18 @@ async def clusters_view(
     price_expr = func.coalesce(Item.current_buyout_cents, Item.current_bid_cents)
     stmt = (
         select(
-            Item.cluster_key,
+            Cluster.cluster_key,
             func.count(Item.id).label("item_count"),
             func.min(price_expr).label("min_price"),
             func.max(price_expr).label("max_price"),
             func.avg(price_expr).label("avg_price"),
             func.percentile_cont(0.5).within_group(price_expr).label("median_price"),
         )
-        .where(Item.cluster_key.isnot(None), price_expr.isnot(None))
-        .group_by(Item.cluster_key)
+        .select_from(Cluster)
+        .join(item_clusters_table, item_clusters_table.c.cluster_key == Cluster.cluster_key)
+        .join(Item, Item.id == item_clusters_table.c.item_id)
+        .where(price_expr.isnot(None))
+        .group_by(Cluster.cluster_key)
         .order_by(func.count(Item.id).desc())
         .limit(limit)
     )
@@ -264,6 +358,7 @@ async def item_detail(
             Item,
             Provider.label.label("provider_label"),
         )
+        .options(selectinload(Item.clusters))
         .join(Provider, Provider.key == Item.provider_key)
         .where(Item.id == item_id)
     )
@@ -371,15 +466,18 @@ async def api_clusters(
     price_expr = func.coalesce(Item.current_buyout_cents, Item.current_bid_cents)
     stmt = (
         select(
-            Item.cluster_key.label("cluster_key"),
+            Cluster.cluster_key.label("cluster_key"),
             func.count(Item.id).label("item_count"),
             func.min(price_expr).label("min_price"),
             func.max(price_expr).label("max_price"),
             func.avg(price_expr).label("avg_price"),
             func.percentile_cont(0.5).within_group(price_expr).label("median_price"),
         )
-        .where(Item.cluster_key.isnot(None), price_expr.isnot(None))
-        .group_by(Item.cluster_key)
+        .select_from(Cluster)
+        .join(item_clusters_table, item_clusters_table.c.cluster_key == Cluster.cluster_key)
+        .join(Item, Item.id == item_clusters_table.c.item_id)
+        .where(price_expr.isnot(None))
+        .group_by(Cluster.cluster_key)
         .order_by(func.count(Item.id).desc())
         .limit(limit)
     )

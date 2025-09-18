@@ -41,26 +41,41 @@
     <table>
         <thead>
             <tr>
-                <th>Anbieter</th>
-                <th>Listing</th>
-                <th>Preis</th>
-                <th>Merker</th>
-                <th>Cluster</th>
-                <th>Gesehen</th>
+                <th class="col-provider">Anbieter</th>
+                <th class="col-title">
+                    <a class="sortable {% if sort_state['title']['current'] %}active{% endif %}" href="{{ sort_state['title']['url'] }}">
+                        Listing
+                        {% if sort_state['title']['current'] == 'desc' %}▼{% elif sort_state['title']['current'] == 'asc' %}▲{% endif %}
+                    </a>
+                </th>
+                <th class="col-price">
+                    <a class="sortable {% if sort_state['price']['current'] %}active{% endif %}" href="{{ sort_state['price']['url'] }}">
+                        Preis
+                        {% if sort_state['price']['current'] == 'desc' %}▼{% elif sort_state['price']['current'] == 'asc' %}▲{% endif %}
+                    </a>
+                </th>
+                <th class="col-flags">Merker</th>
+                <th class="col-cluster">Cluster</th>
+                <th class="col-seen">
+                    <a class="sortable {% if sort_state['last_seen']['current'] %}active{% endif %}" href="{{ sort_state['last_seen']['url'] }}">
+                        Gesehen
+                        {% if sort_state['last_seen']['current'] == 'desc' %}▼{% elif sort_state['last_seen']['current'] == 'asc' %}▲{% endif %}
+                    </a>
+                </th>
             </tr>
         </thead>
         <tbody>
         {% for item in items %}
             <tr>
-                <td>
+                <td class="col-provider">
                     <div class="badge">{{ item.provider }}</div>
                     <small class="muted">{{ item.provider_item_id }}</small>
                 </td>
-                <td>
+                <td class="col-title">
                     <a href="/items/{{ item.id }}">{{ item.title }}</a>
                     <small><a href="{{ item.href }}" target="_blank" rel="noopener" class="muted">🔗 Direktlink</a></small>
                 </td>
-                <td>
+                <td class="col-price">
                     <div>
                         {% if item.current_buyout != '-' %}
                             <strong>{{ item.current_buyout }}</strong><small>Sofort</small>
@@ -73,18 +88,20 @@
                         {% endif %}
                     </div>
                 </td>
-                <td>
+                <td class="col-flags">
                     {% if item.direct_buy %}<span class="badge">Direkt</span>{% endif %}
                     {% if item.vb_flag %}<span class="badge">VB</span>{% endif %}
                 </td>
-                <td>
-                    {% if item.cluster_key %}
-                        <span class="badge">{{ item.cluster_key }}</span>
+                <td class="col-cluster">
+                    {% if item.cluster_keys %}
+                        {% for ck in item.cluster_keys %}
+                            <span class="badge">{{ ck }}</span>
+                        {% endfor %}
                     {% else %}
                         <span class="muted">–</span>
                     {% endif %}
                 </td>
-                <td>
+                <td class="col-seen">
                     <div>
                         <small>seit {{ item.first_seen_ts.strftime('%Y-%m-%d %H:%M') if item.first_seen_ts else '-' }}</small>
                         <div>{{ item.last_seen_ts.strftime('%Y-%m-%d %H:%M') if item.last_seen_ts else '-' }}</div>

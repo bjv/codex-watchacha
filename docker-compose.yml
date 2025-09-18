@@ -1,4 +1,17 @@
 services:
+
+  watchacha:
+    build: .
+    depends_on:
+      - serviceName: postgres
+    container_name: watchacha
+    environment:
+      - TZ=Europe/Berlin
+    volumes:
+      - ./app/config.yml:/app/config.yml:ro
+      - ./app/videos:/app/videos
+    restart: unless-stopped
+
   postgres:
     image: postgres:16
     container_name: watchacha-postgres
@@ -10,7 +23,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - watchacha-postgres-data:/var/lib/postgresql/data
+      - ./postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -39,7 +52,5 @@ services:
       retries: 5
 
 volumes:
-  watchacha-postgres-data:
-    driver: local
   watchacha-pgadmin-data:
     driver: local

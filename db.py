@@ -14,8 +14,11 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Table,
     Text,
     UniqueConstraint,
+    delete,
+    insert,
     select,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -34,6 +37,15 @@ class Provider(Base):
     items = relationship("Item", back_populates="provider", cascade="all, delete-orphan")
 
 
+item_clusters_table = Table(
+    "item_clusters",
+    Base.metadata,
+    Column("item_id", BigInteger, ForeignKey("items.id", ondelete="CASCADE"), primary_key=True),
+    Column("cluster_key", String(128), ForeignKey("clusters.cluster_key", ondelete="CASCADE"), primary_key=True),
+    Column("created_ts", DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)),
+)
+
+
 class Item(Base):
     __tablename__ = "items"
 
@@ -42,7 +54,6 @@ class Item(Base):
     provider_item_id = Column(String(128), nullable=False)
     title = Column(Text, nullable=False)
     href = Column(Text, nullable=False)
-    cluster_key = Column(String(128), nullable=True)
     direct_buy = Column(Boolean, nullable=False, default=False)
     vb_flag = Column(Boolean, nullable=False, default=False)
     current_bid_cents = Column(Integer, nullable=True)
@@ -53,6 +64,7 @@ class Item(Base):
 
     provider = relationship("Provider", back_populates="items")
     snapshots = relationship("Snapshot", back_populates="item", cascade="all, delete-orphan", order_by="Snapshot.observed_ts.desc()")
+    clusters = relationship("Cluster", secondary=item_clusters_table, back_populates="items")
 
     __table_args__ = (
         UniqueConstraint("provider_key", "provider_item_id", name="uq_items_provider_item"),
@@ -79,6 +91,15 @@ class Snapshot(Base):
     )
 
 
+class Cluster(Base):
+    __tablename__ = "clusters"
+
+    cluster_key = Column(String(128), primary_key=True)
+    created_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    items = relationship("Item", secondary=item_clusters_table, back_populates="clusters")
+
+
 @dataclass(slots=True)
 class UpsertResult:
     item_id: int
@@ -103,14 +124,18 @@ def compile_cluster_patterns(patterns: Optional[Sequence[str]]) -> List[Pattern[
     return compiled
 
 
-def extract_cluster_key(title: str, patterns: Sequence[Pattern[str]]) -> Optional[str]:
+def extract_cluster_keys(title: str, patterns: Sequence[Pattern[str]]) -> List[str]:
     if not title:
-        return None
+        return []
+    values: List[str] = []
+    seen = set()
     for pattern in patterns:
-        m = pattern.search(title)
-        if m:
-            return m.group(0)
-    return None
+        for match in pattern.finditer(title):
+            key = match.group(0)
+            if key not in seen:
+                seen.add(key)
+                values.append(key)
+    return values
 
 
 def _now_utc() -> datetime:
@@ -137,6 +162,7 @@ class Database:
             self.engine, expire_on_commit=False
         )
         self._provider_cache: Dict[str, str] = {}
+        self._cluster_cache: set[str] = set()
 
     async def init_models(self) -> None:
         async with self.engine.begin() as conn:
@@ -163,13 +189,14 @@ class Database:
                 changed_fields: Dict[str, Tuple[Any, Any]] = {}
                 is_new = item is None
 
+                cluster_keys_normalized = self._normalize_cluster_keys(payload.get("cluster_keys"))
+
                 if item is None:
                     item = Item(
                         provider_key=provider_key,
                         provider_item_id=payload["provider_item_id"],
                         title=payload["title"],
                         href=payload["href"],
-                        cluster_key=payload.get("cluster_key"),
                         direct_buy=bool(payload.get("direct_buy")),
                         vb_flag=bool(payload.get("vb_flag")),
                         current_bid_cents=payload.get("bid_cents"),
@@ -192,7 +219,6 @@ class Database:
                     updates = {
                         "title": payload["title"],
                         "href": payload["href"],
-                        "cluster_key": payload.get("cluster_key"),
                         "direct_buy": bool(payload.get("direct_buy")),
                         "vb_flag": bool(payload.get("vb_flag")),
                         "current_bid_cents": payload.get("bid_cents"),
@@ -207,6 +233,8 @@ class Database:
                                 changed_fields[attr] = (old_val, new_val)
 
                     item.last_seen_ts = now
+
+                await self._sync_item_clusters(session, item, cluster_keys_normalized)
 
                 last_fingerprint = None
                 if not is_new:
@@ -257,3 +285,53 @@ class Database:
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
+
+    def _normalize_cluster_keys(self, keys: Optional[Sequence[str]]) -> List[str]:
+        if not keys:
+            return []
+        normalized: List[str] = []
+        seen = set()
+        for key in keys:
+            if not key:
+                continue
+            val = key.strip()
+            if not val or val in seen:
+                continue
+            seen.add(val)
+            normalized.append(val)
+        return normalized
+
+    async def _sync_item_clusters(self, session: AsyncSession, item: Item, cluster_keys: List[str]) -> None:
+        if cluster_keys is None:
+            return
+
+        stmt = select(item_clusters_table.c.cluster_key).where(item_clusters_table.c.item_id == item.id)
+        result = await session.execute(stmt)
+        existing_keys = {row[0] for row in result.fetchall()}
+        desired_keys = set(cluster_keys)
+
+        to_add = desired_keys - existing_keys
+        to_remove = existing_keys - desired_keys
+
+        if to_add:
+            for key in to_add:
+                await self._ensure_cluster(session, key)
+                await session.execute(
+                    insert(item_clusters_table).values(item_id=item.id, cluster_key=key)
+                )
+
+        if to_remove:
+            await session.execute(
+                delete(item_clusters_table)
+                .where(item_clusters_table.c.item_id == item.id)
+                .where(item_clusters_table.c.cluster_key.in_(to_remove))
+            )
+
+    async def _ensure_cluster(self, session: AsyncSession, cluster_key: str) -> Cluster:
+        cluster = await session.get(Cluster, cluster_key)
+        if cluster is None:
+            cluster = Cluster(cluster_key=cluster_key)
+            session.add(cluster)
+            await session.flush([cluster])
+        self._cluster_cache.add(cluster_key)
+        return cluster
