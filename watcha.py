@@ -1,47 +1,40 @@
-import asyncio, json, re, sys, time, urllib.parse
+import asyncio, re, sys, time, urllib.parse
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Callable
+from typing import List, Dict, Any, Tuple, Callable, Optional
+
 import yaml, httpx
+
+from db import Database, compile_cluster_patterns, extract_cluster_key
 from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 
 # =========================
 # Setup & Utilities
 # =========================
-STATE_DIR = Path("state")
-STATE_DIR.mkdir(exist_ok=True)
-
 ITEM_ID_EBAY_RE = re.compile(r"/itm/(?:[^/]+/)?(?P<id>\d{9,15})")
 ITEM_ID_KA_RE   = re.compile(r"/s-anzeige/.*?/(\d+)")
 PRICE_RE        = re.compile(r"([\d\.\s,]+)\s*€|EUR\s*([\d\.\s,]+)")
 
-def parse_eur(text: str) -> str:
+
+def parse_eur(text: str) -> Tuple[Optional[int], str]:
     if not text:
-        return ""
+        return None, ""
     t = text.replace("\xa0", " ")
     m = PRICE_RE.search(t)
     if not m:
-        return ""
+        return None, ""
     raw = (m.group(1) or m.group(2) or "").strip()
-    val = raw.replace(".", "").replace(" ", "").replace(",", ".")
+    cleaned = raw.replace(".", "").replace(" ", "").replace(",", ".")
     try:
-        return f"{float(val):.2f} €"
-    except:
-        return ""
+        value = Decimal(cleaned)
+    except (InvalidOperation, ValueError):
+        return None, ""
+    quantized = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    cents = int((quantized * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    return cents, f"{quantized:.2f} €"
 
 def query_key(terms: List[str]) -> str:
     return "+".join(terms)
-
-def load_seen(key: str) -> set:
-    p = STATE_DIR / f"{key}.json"
-    if not p.exists():
-        return set()
-    try:
-        return set(json.loads(p.read_text()))
-    except Exception:
-        return set()
-
-def save_seen(key: str, seen: set):
-    (STATE_DIR / f"{key}.json").write_text(json.dumps(sorted(seen)))
 
 # Round-trip Dedup Key (provider + id fallback href)
 def make_round_key(provider_key: str, it: Dict[str, str]) -> str:
@@ -127,7 +120,7 @@ def ebay_build_url(terms: List[str]) -> str:
     q = "+".join(urllib.parse.quote_plus(t) for t in terms)
     return f"https://www.ebay.de/sch/i.html?_nkw={q}&_sacat=0&_sop=10"
 
-async def ebay_parse_results(page) -> List[Dict[str, str]]:
+async def ebay_parse_results(page) -> List[Dict[str, Any]]:
     # Finde alle Karten/Links
     selectors = [
         "li.s-item a.s-item__link",
@@ -159,6 +152,13 @@ async def ebay_parse_results(page) -> List[Dict[str, str]]:
         bid_price = ""
         buy_price = ""
 
+        bid_price = ""
+        bid_cents: Optional[int] = None
+        buy_price = ""
+        buy_cents: Optional[int] = None
+        item_vb_flag = False
+        item_direct_buy = False
+
         if li:
             # Primär: neues Kartenlayout (dein Beispiel mit "su-card...")
             rows = await li.query_selector_all(
@@ -178,7 +178,7 @@ async def ebay_parse_results(page) -> List[Dict[str, str]]:
 
                     # Preiszeile?
                     has_price_span = await row.query_selector(".s-card__price") is not None
-                    is_price_like  = ("eur" in low) or ("€" in txt)
+                    is_price_like = ("eur" in low) or ("€" in txt)
                     if has_price_span or is_price_like:
                         price_txt = txt
                         vb_flag = False
@@ -209,20 +209,28 @@ async def ebay_parse_results(page) -> List[Dict[str, str]]:
 
                             j += 1
 
-                        pnorm = parse_eur(price_txt)
-                        if vb_flag and pnorm:
-                            pnorm = pnorm + " (VB)"
+                        cents, normalized = parse_eur(price_txt)
+                        if normalized:
+                            display_value = normalized
+                            if vb_flag:
+                                item_vb_flag = True
+                                display_value = f"{display_value} (VB)"
 
-                        if mark_bid and pnorm:
-                            if not bid_price:
-                                bid_price = pnorm
-                        elif mark_buy and pnorm:
-                            if not buy_price:
-                                buy_price = pnorm
-                        else:
-                            # kein explizites Label -> Festpreis
-                            if not buy_price and pnorm:
-                                buy_price = pnorm
+                            if mark_bid:
+                                if not bid_price:
+                                    bid_price = display_value
+                                    bid_cents = cents
+                            elif mark_buy:
+                                if not buy_price:
+                                    buy_price = display_value
+                                    buy_cents = cents
+                                    item_direct_buy = True
+                            else:
+                                # kein explizites Label -> Festpreis
+                                if not buy_price:
+                                    buy_price = display_value
+                                    buy_cents = cents
+                                    item_direct_buy = True
 
                         i = j
                         continue
@@ -241,23 +249,38 @@ async def ebay_parse_results(page) -> List[Dict[str, str]]:
                         el = await li.query_selector(psel)
                         if el:
                             main_txt = (await el.text_content()) or ""
-                            main_norm = parse_eur(main_txt)
-                            if main_norm:
-                                li_text = ((await li.text_content()) or "").lower()
-                                if "gebot" in li_text or "bids" in li_text:
-                                    bid_price = main_norm
+                            cents, normalized = parse_eur(main_txt)
+                            if normalized:
+                                li_text_full = ((await li.text_content()) or "").lower()
+                                display_value = normalized
+                                if any(token in li_text_full for token in ("preisvorschlag", "best offer", "vb")):
+                                    item_vb_flag = True
+                                    display_value = f"{display_value} (VB)"
+                                if "gebot" in li_text_full or "bids" in li_text_full:
+                                    bid_price = display_value
+                                    bid_cents = cents
                                 else:
-                                    buy_price = main_norm
+                                    buy_price = display_value
+                                    buy_cents = cents
+                                    item_direct_buy = True
                                 break
                     except Exception:
                         pass
+
+        if buy_price:
+            item_direct_buy = True
 
         out.append({
             "id": item_id,
             "title": title.strip(),
             "href": href.split("?")[0],
             "bid": bid_price,
+            "bid_cents": bid_cents,
             "buyout": buy_price,
+            "buyout_cents": buy_cents,
+            "direct_buy": item_direct_buy,
+            "vb_flag": item_vb_flag,
+            "currency": "EUR",
         })
     return out
 
@@ -274,7 +297,7 @@ def ka_build_url(terms: List[str]) -> str:
     #return f"https://www.kleinanzeigen.de/s-{q}/k0"
     return f"https://www.kleinanzeigen.de/anzeige:angebote/{q}/k0"
 
-async def ka_parse_results(page) -> List[Dict[str, str]]:
+async def ka_parse_results(page) -> List[Dict[str, Any]]:
     try:
         await page.wait_for_selector("article.aditem", timeout=6000)
     except PWTimeout:
@@ -304,9 +327,9 @@ async def ka_parse_results(page) -> List[Dict[str, str]]:
         price_el = await card.query_selector(".aditem-main--middle--price-shipping--price")
         price_txt = ((await price_el.text_content()) or "").replace("\xa0", " ").strip() if price_el else ""
         vb_flag = ("vb" in price_txt.lower()) or ("preisvorschlag" in price_txt.lower())
-        price_norm = parse_eur(price_txt)
-        if price_norm and vb_flag and "(VB)" not in price_norm:
-            price_norm = price_norm + " (VB)"
+        price_cents, price_display = parse_eur(price_txt)
+        if price_display and vb_flag and "(VB)" not in price_display:
+            price_display = f"{price_display} (VB)"
 
         # Direkt kaufen?
         direct_buy = False
@@ -323,19 +346,28 @@ async def ka_parse_results(page) -> List[Dict[str, str]]:
             pass
 
         bid_price = ""
+        bid_cents = None
         buy_price = ""
-        if price_norm:
+        buy_cents = None
+        if price_display:
             if direct_buy:
-                buy_price = price_norm
+                buy_price = price_display
+                buy_cents = price_cents
             else:
-                bid_price = price_norm
+                bid_price = price_display
+                bid_cents = price_cents
 
         out.append({
             "id": ad_id,
             "title": title,
             "href": href,
             "bid": bid_price,
+            "bid_cents": bid_cents,
             "buyout": buy_price,
+            "buyout_cents": buy_cents,
+            "direct_buy": direct_buy,
+            "vb_flag": vb_flag,
+            "currency": "EUR",
         })
 
     return out
@@ -362,7 +394,7 @@ PROVIDERS: Dict[str, Dict[str, Callable[..., Any]]] = {
 # =========================
 # Scrape One (per provider)
 # =========================
-async def scrape_provider(page, provider_key: str, terms: List[str]) -> Tuple[str, List[Dict[str, str]]]:
+async def scrape_provider(page, provider_key: str, terms: List[str]) -> Tuple[str, List[Dict[str, Any]]]:
     p = PROVIDERS[provider_key]
     url = p["build_url"](terms)
     await navigate_with_fallback(page, url)
@@ -378,7 +410,7 @@ async def scrape_provider(page, provider_key: str, terms: List[str]) -> Tuple[st
 # =========================
 # Run Loop
 # =========================
-async def run_once(browser, cfg):
+async def run_once(browser, cfg, database: Database, cluster_patterns):
     context = await browser.new_context(
         user_agent=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -396,7 +428,7 @@ async def run_once(browser, cfg):
     reported_this_round = set()
 
     try:
-        for s in cfg["searches"]:
+        for s in cfg.get("searches", []):
             name = s.get("name") or query_key(s["terms"])
             terms = s["terms"]
             providers = s.get("providers", ["ebay"])  # default eBay
@@ -406,17 +438,41 @@ async def run_once(browser, cfg):
                     print(f"[skip] unknown provider: {provider_key}")
                     continue
 
-                # State pro provider+query
-                state_key = f"{provider_key}-{query_key(terms)}"
-                seen = load_seen(state_key)
-
                 try:
                     url, items = await scrape_provider(page, provider_key, terms)
                 except PWTimeout:
                     print(f"[warn] navigation failed, skipping {provider_key}:{terms}")
                     continue
 
-                new_items = [it for it in items if it["id"] not in seen]
+                new_items: List[Dict[str, Any]] = []
+                for it in items:
+                    if not it.get("id"):
+                        continue
+                    cluster_key = extract_cluster_key(it.get("title", ""), cluster_patterns)
+                    if cluster_key:
+                        it["cluster_key"] = cluster_key
+                    payload = {
+                        "provider_item_id": str(it.get("id")),
+                        "title": it.get("title", ""),
+                        "href": it.get("href", ""),
+                        "cluster_key": cluster_key,
+                        "direct_buy": bool(it.get("direct_buy")),
+                        "vb_flag": bool(it.get("vb_flag")),
+                        "bid_cents": it.get("bid_cents"),
+                        "buyout_cents": it.get("buyout_cents"),
+                        "currency": it.get("currency", "EUR"),
+                    }
+                    try:
+                        db_result = await database.upsert_item_and_snapshot(
+                            provider_key,
+                            PROVIDERS[provider_key]["label"],
+                            payload,
+                        )
+                        it["_db_result"] = db_result
+                        if db_result.is_new_item:
+                            new_items.append(it)
+                    except Exception as exc:
+                        print(f"[db] upsert failed for {provider_key}:{it.get('id')}: {exc}")
                 if new_items:
                     for it in new_items:
                         prov_label = PROVIDERS[provider_key]["label"]
@@ -428,13 +484,11 @@ async def run_once(browser, cfg):
                             f"ID: {it['id']}"
                         )
                         gk = make_round_key(provider_key, it)
-                        seen.add(it["id"])
                         if gk in reported_this_round:
                             print(f"[skip-round] already reported this round: {gk}")
                             continue
                         await notify(cfg, title, msg, it["href"])
                         reported_this_round.add(gk)
-                    save_seen(state_key, seen)
 
                 print(f"{time.strftime('%H:%M:%S')} {name} [{provider_key}]: {len(new_items)} neu, {len(items)} gesamt")
     finally:
@@ -443,32 +497,47 @@ async def run_once(browser, cfg):
 async def main():
     CONFIG_PATH = Path("config.yml")
 
-    async with async_playwright() as p:
-        # initiale Config nur für Browser-Start (headless/devtools)
-        cfg = yaml.safe_load(CONFIG_PATH.read_text()) or {}
-        headless = bool(cfg.get("headless", True))
+    cfg = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+    db_cfg = cfg.get("database") or {}
+    db_url = db_cfg.get("url")
+    if not db_url:
+        raise RuntimeError("config.yml missing database.url for Postgres connection")
 
-        browser = await p.chromium.launch(
-            headless=headless,
-            slow_mo=0 if headless else 300,
-            args=["--disable-blink-features=AutomationControlled"],
-            devtools=not headless,
-        )
-        try:
-            while True:
-                # Config NEU laden (für searches, ntfy_topic, interval_seconds, etc.)
-                try:
-                    new_cfg = yaml.safe_load(CONFIG_PATH.read_text()) or {}
-                    cfg = new_cfg
-                except Exception as e:
-                    print(f"[warn] config reload failed: {e} (verwende letzte gültige)")
+    database = Database(db_url, echo=bool(db_cfg.get("echo", False)))
+    await database.init_models()
 
-                await run_once(browser, cfg)
+    try:
+        async with async_playwright() as p:
+            # initiale Config nur für Browser-Start (headless/devtools)
+            headless = bool(cfg.get("headless", True))
 
-                interval = int(cfg.get("interval_seconds", 60))
-                await asyncio.sleep(interval)
-        finally:
-            await browser.close()
+            browser = await p.chromium.launch(
+                headless=headless,
+                slow_mo=0 if headless else 300,
+                args=["--disable-blink-features=AutomationControlled"],
+                devtools=not headless,
+            )
+            try:
+                while True:
+                    # Config NEU laden (für searches, ntfy_topic, interval_seconds, etc.)
+                    try:
+                        new_cfg = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+                        new_db_url = (new_cfg.get("database") or {}).get("url")
+                        if new_db_url and new_db_url != db_url:
+                            print("[warn] database.url change detected – restart watcher to apply")
+                        cfg = new_cfg
+                    except Exception as e:
+                        print(f"[warn] config reload failed: {e} (verwende letzte gültige)")
+
+                    cluster_patterns = compile_cluster_patterns(((cfg.get("clusters") or {}).get("patterns")))
+                    await run_once(browser, cfg, database, cluster_patterns)
+
+                    interval = int(cfg.get("interval_seconds", 60))
+                    await asyncio.sleep(interval)
+            finally:
+                await browser.close()
+    finally:
+        await database.dispose()
 
 
 

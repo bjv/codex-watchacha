@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Cluster – Watchacha Dashboard{% endblock %}
+
+{% block content %}
+    <h2>Cluster-Auswertung</h2>
+    <form class="filters" method="get">
+        <label>
+            Anbieter
+            <select name="provider">
+                <option value="">Alle</option>
+                {% for prov in providers %}
+                    <option value="{{ prov.key }}" {% if provider_filter == prov.key %}selected{% endif %}>{{ prov.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            Limit
+            <input type="number" name="limit" value="{{ limit }}" min="1" max="200">
+        </label>
+        <div style="display:flex; align-items:flex-end; gap:8px;">
+            <a href="/clusters" title="Filter zurücksetzen" style="display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:999px; background:rgba(255,255,255,0.08); text-decoration:none; color:var(--accent); font-size:1.2rem; line-height:1;">❌</a>
+            <button type="submit">Aktualisieren</button>
+        </div>
+    </form>
+
+    {% if clusters %}
+    <table>
+        <thead>
+            <tr>
+                <th>Cluster</th>
+                <th>Anzahl Listings</th>
+                <th>Min</th>
+                <th>Median</th>
+                <th>Ø</th>
+                <th>Max</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in clusters %}
+            <tr>
+                <td><span class="badge">{{ row.cluster_key }}</span></td>
+                <td>{{ row.item_count }}</td>
+                <td>{{ row.min_price }}</td>
+                <td>{{ row.median_price }}</td>
+                <td>{{ row.avg_price }}</td>
+                <td>{{ row.max_price }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+        <p class="muted">Noch keine Cluster-Daten verfügbar.</p>
+    {% endif %}
+{% endblock %}

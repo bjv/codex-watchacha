@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}Listings – Watchacha Dashboard{% endblock %}
+
+{% block content %}
+    <h2>Aktuelle Listings</h2>
+    <form class="filters" method="get">
+        <label>
+            Suchbegriff
+            <input type="text" name="q" value="{{ query }}" placeholder="z. B. BlueBrixx">
+        </label>
+        <label>
+            Anbieter
+            <select name="provider">
+                <option value="">Alle</option>
+                {% for prov in providers %}
+                    <option value="{{ prov.key }}" {% if provider_filter == prov.key %}selected{% endif %}>{{ prov.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            Cluster-Key
+            <select name="cluster">
+                <option value="">Alle</option>
+                {% for ck in clusters %}
+                    <option value="{{ ck }}" {% if cluster_filter == ck %}selected{% endif %}>{{ ck }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            Limit
+            <input type="number" name="limit" value="{{ limit }}" min="1" max="200">
+        </label>
+        <div style="display:flex; align-items:flex-end; gap:8px;">
+            <a href="/" title="Filter zurücksetzen" style="display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:999px; background:rgba(255,255,255,0.08); text-decoration:none; color:var(--accent); font-size:1.2rem; line-height:1;">❌</a>
+            <button type="submit">Filter anwenden</button>
+        </div>
+    </form>
+
+    {% if items %}
+    <table>
+        <thead>
+            <tr>
+                <th>Anbieter</th>
+                <th>Listing</th>
+                <th>Preis</th>
+                <th>Merker</th>
+                <th>Cluster</th>
+                <th>Gesehen</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for item in items %}
+            <tr>
+                <td>
+                    <div class="badge">{{ item.provider }}</div>
+                    <small class="muted">{{ item.provider_item_id }}</small>
+                </td>
+                <td>
+                    <a href="{{ item.href }}" target="_blank" rel="noopener">{{ item.title }}</a>
+                </td>
+                <td>
+                    <div>
+                        {% if item.current_buyout != '-' %}
+                            <strong>{{ item.current_buyout }}</strong><small>Sofort</small>
+                        {% endif %}
+                        {% if item.current_bid != '-' %}
+                            <div>{{ item.current_bid }}<small>Gebot</small></div>
+                        {% endif %}
+                        {% if item.current_buyout == '-' and item.current_bid == '-' %}
+                            <span class="muted">-</span>
+                        {% endif %}
+                    </div>
+                </td>
+                <td>
+                    {% if item.direct_buy %}<span class="badge">Direkt</span>{% endif %}
+                    {% if item.vb_flag %}<span class="badge">VB</span>{% endif %}
+                </td>
+                <td>
+                    {% if item.cluster_key %}
+                        <span class="badge">{{ item.cluster_key }}</span>
+                    {% else %}
+                        <span class="muted">–</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div>
+                        <small>seit {{ item.first_seen_ts.strftime('%Y-%m-%d %H:%M') if item.first_seen_ts else '-' }}</small>
+                        <div>{{ item.last_seen_ts.strftime('%Y-%m-%d %H:%M') if item.last_seen_ts else '-' }}</div>
+                    </div>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+        <p class="muted">Keine Treffer – such weiter! 🔍</p>
+    {% endif %}
+{% endblock %}

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <title>{% block title %}Watchacha Dashboard{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        :root {
+            color-scheme: dark light;
+            --bg: #11151c;
+            --fg: #f5f7fa;
+            --accent: #0099ff;
+            --muted: #738091;
+            font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            color: var(--fg);
+        }
+        header {
+            background: rgba(0, 0, 0, 0.4);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 1.25rem;
+        }
+        nav a {
+            color: var(--fg);
+            margin-right: 16px;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        nav a.active {
+            color: var(--accent);
+        }
+        main {
+            padding: 24px;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        form.filters {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 16px;
+            border-radius: 12px;
+        }
+        label {
+            display: flex;
+            flex-direction: column;
+            font-size: 0.85rem;
+            gap: 4px;
+        }
+        input[type="text"],
+        select,
+        input[type="number"],
+        button {
+            font: inherit;
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(0, 0, 0, 0.2);
+            color: var(--fg);
+        }
+        button {
+            cursor: pointer;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            font-weight: 600;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+        tr:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        a {
+            color: var(--accent);
+        }
+        small {
+            color: var(--muted);
+            display: block;
+            margin-top: 4px;
+            font-size: 0.75rem;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 6px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            background: rgba(0, 153, 255, 0.2);
+            color: var(--accent);
+            margin-right: 6px;
+        }
+        .muted {
+            color: var(--muted);
+        }
+        footer {
+            margin-top: 48px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.75rem;
+        }
+        @media (max-width: 720px) {
+            main {
+                padding: 16px;
+            }
+            header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            nav a {
+                margin-right: 12px;
+                font-size: 0.95rem;
+            }
+            table {
+                font-size: 0.9rem;
+            }
+            th, td {
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Watchacha Dashboard</h1>
+        <nav>
+            <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Listings</a>
+            <a href="/clusters" class="{% if request.url.path.startswith('/clusters') %}active{% endif %}">Cluster</a>
+        </nav>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer>
+        Stand: {{ now.strftime('%Y-%m-%d %H:%M') }} UTC
+    </footer>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('form.filters').forEach(form => {
+                form.querySelectorAll('select, input[type="number"]').forEach(el => {
+                    el.addEventListener('change', () => form.submit());
+                });
+                form.querySelectorAll('input[type="text"]').forEach(el => {
+                    el.addEventListener('keydown', event => {
+                        if (event.key === 'Enter') {
+                            event.preventDefault();
+                            form.submit();
+                        }
+                    });
+                });
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+playwright
+pyyaml
+httpx
+sqlalchemy
+asyncpg
+fastapi
+uvicorn[standard]
+jinja2

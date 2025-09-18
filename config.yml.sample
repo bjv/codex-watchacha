@@ -1,0 +1,29 @@
+headless: true
+record_video: false
+interval_seconds: 120
+
+database:
+  url: postgresql+asyncpg://user:password@localhost:5432/watchawatch
+  echo: false
+
+clusters:
+  patterns:
+    - "\\b\\d{6}\\b"
+
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""
+  disable_web_page_preview: true
+
+searches:
+  - name: BlueBrixx Klassiker
+    terms:
+      - bluebrixx
+      - 104583
+    providers:
+      - ebay
+      - kleinanzeigen
+  - name: Generische Suche
+    terms:
+      - bluebrixx
