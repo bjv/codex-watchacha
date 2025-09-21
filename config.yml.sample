@@ -21,6 +21,8 @@ searches:
     terms:
       - bluebrixx
       - 104583
+    exclude_terms:
+      - gebraucht
     providers:
       - ebay
       - kleinanzeigen

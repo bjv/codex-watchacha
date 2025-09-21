@@ -394,16 +394,24 @@ PROVIDERS: Dict[str, Dict[str, Callable[..., Any]]] = {
 # =========================
 # Scrape One (per provider)
 # =========================
-async def scrape_provider(page, provider_key: str, terms: List[str]) -> Tuple[str, List[Dict[str, Any]]]:
+async def scrape_provider(
+    page,
+    provider_key: str,
+    terms: List[str],
+    exclude_terms: Optional[List[str]] = None,
+) -> Tuple[str, List[Dict[str, Any]]]:
     p = PROVIDERS[provider_key]
     url = p["build_url"](terms)
     await navigate_with_fallback(page, url)
     items = await p["parse"](page)
     # Terms-Filter: jeder Begriff muss im Titel vorkommen
     filtered = []
+    excludes = [t.lower() for t in (exclude_terms or [])]
     for it in items:
         tl = it["title"].lower()
         if all(t.lower() in tl for t in terms):
+            if excludes and any(ex in tl for ex in excludes):
+                continue
             filtered.append(it)
     return url, filtered
 
@@ -431,6 +439,7 @@ async def run_once(browser, cfg, database: Database, cluster_patterns):
         for s in cfg.get("searches", []):
             name = s.get("name") or query_key(s["terms"])
             terms = s["terms"]
+            exclude_terms = s.get("exclude_terms", [])
             providers = s.get("providers", ["ebay"])  # default eBay
 
             for provider_key in providers:
@@ -439,7 +448,7 @@ async def run_once(browser, cfg, database: Database, cluster_patterns):
                     continue
 
                 try:
-                    url, items = await scrape_provider(page, provider_key, terms)
+                    url, items = await scrape_provider(page, provider_key, terms, exclude_terms)
                 except PWTimeout:
                     print(f"[warn] navigation failed, skipping {provider_key}:{terms}")
                     continue
