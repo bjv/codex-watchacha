@@ -96,14 +96,43 @@
         <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30">
             <h3 class="text-lg font-semibold text-white">Snapshot vom {{ selected_snapshot.observed_ts.strftime('%Y-%m-%d %H:%M') }}</h3>
             <div class="mt-4 grid gap-4 sm:grid-cols-2">
-                {% for row in detail_rows %}
-                    <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4">
+                {% for row in detail_rows if row.field == 'title' %}
+                    <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 flex flex-col gap-2">
                         <div class="text-xs uppercase tracking-wide text-slate-500">{{ row.label }}</div>
-                        <div class="mt-1 text-sm font-medium text-white">{{ row.current }}</div>
+                        <div class="text-sm font-medium text-white">{{ row.current }}</div>
                         {% if row.changed and row.previous and row.previous != row.current %}
-                            <div class="mt-1 text-xs text-amber-300">Vorher: {{ row.previous }}</div>
+                            <div class="text-xs text-amber-300">Vorher: {{ row.previous }}</div>
                         {% endif %}
                     </div>
+                {% endfor %}
+                <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4">
+                    <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Preis</div>
+                    <div class="grid grid-cols-[auto,minmax(0,1fr),minmax(0,1fr)] gap-3 text-sm text-slate-200">
+                        {% set bid = detail_rows | selectattr('field','equalto','bid_cents') | list | first %}
+                        <div class="text-xs text-slate-400">Gebot</div>
+                        <div class="rounded-full bg-brand/10 px-3 py-1 font-medium text-brand">{{ bid.current if bid else '-' }}</div>
+                        <div class="text-xs text-amber-300 text-right">{% if bid and bid.previous and bid.previous != bid.current %}{{ bid.previous }}{% else %}-{% endif %}</div>
+
+                        {% set buy = detail_rows | selectattr('field','equalto','buyout_cents') | list | first %}
+                        <div class="text-xs text-slate-400">Sofort</div>
+                        <div class="rounded-full bg-emerald-500/20 px-3 py-1 font-medium text-emerald-300">{{ buy.current if buy else '-' }}</div>
+                        <div class="text-xs text-amber-300 text-right">{% if buy and buy.previous and buy.previous != buy.current %}{{ buy.previous }}{% else %}-{% endif %}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-4 grid gap-4">
+                {% for row in detail_rows %}
+                    {% if row.field in ['vb_flag', 'direct_buy'] %}
+                        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 flex flex-wrap items-center justify-between">
+                            <div>
+                                <div class="text-xs uppercase tracking-wide text-slate-500">{{ row.label }}</div>
+                                <div class="mt-1 text-sm font-medium text-white">{{ row.current }}</div>
+                            </div>
+                            {% if row.changed and row.previous and row.previous != row.current %}
+                                <div class="text-xs text-amber-300">Vorher: {{ row.previous }}</div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
                 {% endfor %}
             </div>
         </section>
