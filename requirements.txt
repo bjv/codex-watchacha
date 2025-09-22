@@ -7,3 +7,4 @@ fastapi
 uvicorn[standard]
 jinja2
 rapidfuzz
+python-multipart
