@@ -1,15 +1,37 @@
 services:
-
-  watchacha:
-    build: .
+  watchacha-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8000"]
+    container_name: watchacha-web
     depends_on:
-      - serviceName: postgres
-    container_name: watchacha
+      postgres:
+        condition: service_healthy
     environment:
       - TZ=Europe/Berlin
     volumes:
-      - ./app/config.yml:/app/config.yml:ro
-      - ./app/videos:/app/videos
+      - ./config.yml:/app/config.yml:ro
+      - ./artifacts:/app/artifacts:ro
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  watchacha-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "watcha.py"]
+    container_name: watchacha-scraper
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - TZ=Europe/Berlin
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - ./artifacts:/app/artifacts:ro
+      - ./videos:/app/videos
     restart: unless-stopped
 
   postgres:
