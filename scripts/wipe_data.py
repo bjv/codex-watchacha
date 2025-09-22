@@ -2,7 +2,7 @@
 """Utility to wipe Watchacha database tables.
 
 Reads the Postgres connection URL from config.yml and truncates all
-application tables (snapshots, item_clusters, items, clusters, providers)
+application tables (snapshots, item_set_matches, items, sets, providers)
 with CASCADE semantics. Requires explicit confirmation unless --yes is
 passed.
 """
@@ -27,7 +27,7 @@ async def wipe_database(db_url: str) -> None:
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "TRUNCATE TABLE snapshots, item_clusters, items, clusters, providers "
+                    "TRUNCATE TABLE item_set_matches, snapshots, items, sets, providers "
                     "RESTART IDENTITY CASCADE"
                 )
             )
@@ -60,7 +60,7 @@ async def main() -> int:
     args = parse_args()
     if not args.yes:
         prompt = (
-            "This will DELETE all scraped data (providers, items, clusters, snapshots).\n"
+            "This will DELETE all scraped data (providers, items, sets, snapshots).\n"
             "Type 'wipe it' to continue: "
         )
         try:

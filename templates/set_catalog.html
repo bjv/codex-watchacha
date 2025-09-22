@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Set-Katalog – Watchacha Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30">
+        <form class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" method="get">
+            <label class="flex flex-col gap-2 text-sm text-slate-300">
+                Ära
+                <select name="era" class="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40">
+                    <option value="">Alle</option>
+                    {% for value in era_options %}
+                        <option value="{{ value }}" {% if filters.era == value %}selected{% endif %}>{{ value }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="flex flex-col gap-2 text-sm text-slate-300">
+                Serie / Film
+                <select name="series" class="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40">
+                    <option value="">Alle</option>
+                    {% for value in series_options %}
+                        <option value="{{ value }}" {% if filters.series == value %}selected{% endif %}>{{ value }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="flex flex-col gap-2 text-sm text-slate-300">
+                Teile von
+                <input type="number" name="parts_min" value="{{ filters.parts_min }}" min="0" class="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40">
+            </label>
+            <label class="flex flex-col gap-2 text-sm text-slate-300">
+                Teile bis
+                <input type="number" name="parts_max" value="{{ filters.parts_max }}" min="0" class="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40">
+            </label>
+            <label class="flex flex-col gap-2 text-sm text-slate-300">
+                Limit
+                <input type="number" name="limit" value="{{ limit }}" min="1" max="1000" class="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40">
+            </label>
+            <div class="flex items-center gap-3">
+                <button type="submit" class="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-black shadow-lg shadow-brand/40 transition hover:bg-sky-400">🔍 Anwenden</button>
+                <a href="/sets/catalog" class="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/10">❌ Reset</a>
+            </div>
+        </form>
+        <div class="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            <span>Sortierung:</span>
+            {% for key, state in sort_state.items() %}
+                <a href="{{ state.url }}" class="rounded-full border px-3 py-1 font-medium transition {{ 'bg-brand text-black border-transparent shadow shadow-brand/40' if state.current else 'border-white/10 text-slate-300 hover:bg-white/10' }}">
+                    {{ state.label }}
+                    {% if state.current == 'desc' %}▼{% elif state.current == 'asc' %}▲{% endif %}
+                </a>
+            {% endfor %}
+        </div>
+    </section>
+
+    {% if sets %}
+        <div class="overflow-hidden rounded-2xl border border-white/10 bg-panel shadow-xl shadow-black/30">
+            <table class="min-w-full divide-y divide-white/5">
+                <thead class="bg-white/5 text-xs uppercase tracking-wide text-slate-400">
+                    <tr>
+                        <th class="px-4 py-3 text-left">Set-Nr</th>
+                        <th class="px-4 py-3 text-left">Name</th>
+                        <th class="px-4 py-3 text-left">UVP</th>
+                        <th class="px-4 py-3 text-left">Erscheinung</th>
+                        <th class="px-4 py-3 text-left">Teile</th>
+                        <th class="px-4 py-3 text-left">Kategorie</th>
+                        <th class="px-4 py-3 text-left">Ära</th>
+                        <th class="px-4 py-3 text-left">Serie / Film</th>
+                        <th class="px-4 py-3 text-left">Listings</th>
+                        <th class="px-4 py-3 text-right">Details</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-white/5 text-sm text-slate-200">
+                    {% for row in sets %}
+                        <tr class="hover:bg-white/5">
+                            <td class="px-4 py-3 font-semibold text-brand">{{ row.set_nr }}</td>
+                            <td class="px-4 py-3">{{ row.name }}</td>
+                            <td class="px-4 py-3 text-slate-300">{{ row.uvp }}</td>
+                            <td class="px-4 py-3 text-slate-300">{{ row.release_date }}</td>
+                            <td class="px-4 py-3">{{ row.parts }}</td>
+                            <td class="px-4 py-3">{{ row.category }}</td>
+                            <td class="px-4 py-3">{{ row.era }}</td>
+                            <td class="px-4 py-3">{{ row.series }}</td>
+                            <td class="px-4 py-3">{{ row.listing_count }}</td>
+                            <td class="px-4 py-3 text-right">
+                                <a href="/sets/{{ row.set_nr }}" class="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-xs text-slate-200 transition hover:border-brand/40 hover:text-brand">Ansehen →</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="rounded-2xl border border-dashed border-white/20 bg-slate-900/40 p-10 text-center text-slate-400">
+            Keine Sets gefunden.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

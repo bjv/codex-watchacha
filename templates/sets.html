@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Sets – Watchacha Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30">
+        <form class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" method="get">
+            <label class="flex flex-col gap-2 text-sm text-slate-300">
+                Anbieter
+                <select name="provider" class="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40">
+                    <option value="">Alle</option>
+                    {% for prov in providers %}
+                        <option value="{{ prov.key }}" {% if provider_filter == prov.key %}selected{% endif %}>{{ prov.label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="flex flex-col gap-2 text-sm text-slate-300">
+                Limit
+                <input type="number" name="limit" value="{{ limit }}" min="1" max="200" class="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40">
+            </label>
+            <div class="flex items-center gap-3">
+                <button type="submit" class="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-black shadow-lg shadow-brand/40 transition hover:bg-sky-400">🔍 Anwenden</button>
+                <a href="/sets" class="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/10">❌ Reset</a>
+            </div>
+        </form>
+    </section>
+
+    {% if sets %}
+    <section class="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+        {% for row in sets %}
+            <article class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30 transition hover:border-brand/60">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <a href="/sets/{{ row.set_nr }}" class="text-sm font-semibold text-brand">Set {{ row.set_nr }}</a>
+                        <h3 class="mt-1 text-lg font-semibold text-white">{{ row.name or '—' }}</h3>
+                    </div>
+                    <span class="rounded-full bg-brand/10 px-3 py-1 text-xs font-medium text-brand">{{ row.item_count }} Listings</span>
+                </div>
+                <dl class="mt-4 grid grid-cols-2 gap-3 text-sm text-slate-300">
+                    <div>
+                        <dt class="text-xs uppercase tracking-wide text-slate-500">Min</dt>
+                        <dd class="font-medium text-emerald-300">{{ row.min_price }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-xs uppercase tracking-wide text-slate-500">Max</dt>
+                        <dd>{{ row.max_price }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-xs uppercase tracking-wide text-slate-500">Median</dt>
+                        <dd>{{ row.median_price }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-xs uppercase tracking-wide text-slate-500">Ø Preis</dt>
+                        <dd>{{ row.avg_price }}</dd>
+                    </div>
+                </dl>
+                <div class="mt-4 flex items-center justify-between text-xs text-slate-400">
+                    <span>Ø Match: {% if row.avg_match_score is not none %}{{ '%.2f' % row.avg_match_score }}{% else %}-{% endif %}</span>
+                    <a href="/sets/{{ row.set_nr }}" class="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-xs text-slate-200 transition hover:border-brand/40 hover:text-brand">Details →</a>
+                </div>
+            </article>
+        {% endfor %}
+    </section>
+    {% else %}
+        <div class="rounded-2xl border border-dashed border-white/20 bg-slate-900/40 p-10 text-center text-slate-400">
+            Noch keine Treffer mit Set-Zuordnung.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

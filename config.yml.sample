@@ -6,10 +6,6 @@ database:
   url: postgresql+asyncpg://user:password@localhost:5432/watchawatch
   echo: false
 
-clusters:
-  patterns:
-    - "\\b\\d{6}\\b"
-
 telegram:
   enabled: false
   bot_token: ""

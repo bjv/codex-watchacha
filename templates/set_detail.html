@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Set {{ set.set_nr }} – Watchacha Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <a href="/sets" class="inline-flex items-center gap-2 text-sm text-slate-300 transition hover:text-brand">← Zurück zur Set-Übersicht</a>
+
+    <header class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <h2 class="text-2xl font-semibold text-white">Set {{ set.set_nr }}</h2>
+                {% if set.name %}<p class="text-sm text-slate-400">{{ set.name }}</p>{% endif %}
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs text-slate-300">
+                {% if set.release_date %}<span class="rounded-full bg-white/10 px-3 py-1">Release {{ set.release_date }}</span>{% endif %}
+                {% if set.parts %}<span class="rounded-full bg-white/10 px-3 py-1">{{ set.parts }} Teile</span>{% endif %}
+                {% if set.category %}<span class="rounded-full bg-white/10 px-3 py-1">{{ set.category }}</span>{% endif %}
+                {% if set.era %}<span class="rounded-full bg-white/10 px-3 py-1">{{ set.era }}</span>{% endif %}
+                {% if set.series %}<span class="rounded-full bg-white/10 px-3 py-1">{{ set.series }}</span>{% endif %}
+            </div>
+        </div>
+        {% if set.features %}
+            <p class="mt-3 text-sm text-slate-400">{{ set.features }}</p>
+        {% endif %}
+    </header>
+
+    <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30">
+        <div class="grid gap-4 md:grid-cols-4">
+            <div class="rounded-xl bg-slate-900/60 p-4 text-center">
+                <p class="text-xs uppercase tracking-wide text-slate-500">Listings</p>
+                <p class="mt-1 text-2xl font-semibold text-white">{{ stats.item_count }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-900/60 p-4 text-center">
+                <p class="text-xs uppercase tracking-wide text-slate-500">Min / Median / Ø / Max</p>
+                <p class="mt-1 text-sm text-slate-200">{{ stats.min_price }} / {{ stats.median_price }} / {{ stats.avg_price }} / {{ stats.max_price }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-900/60 p-4 text-center">
+                <p class="text-xs uppercase tracking-wide text-slate-500">Ø Match</p>
+                <p class="mt-1 text-2xl font-semibold text-white">{% if stats.avg_match_score is not none %}{{ '%.2f' % stats.avg_match_score }}{% else %}-{% endif %}</p>
+            </div>
+            <div class="rounded-xl bg-slate-900/60 p-4 text-center">
+                <p class="text-xs uppercase tracking-wide text-slate-500">Bekannte Anbieter</p>
+                <p class="mt-1 text-sm text-slate-200">{{ providers|length }}</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30">
+        <form class="flex flex-wrap items-end gap-4" method="get">
+            <label class="flex flex-col gap-2 text-sm text-slate-300">
+                Anbieter
+                <select name="provider" class="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40">
+                    <option value="">Alle</option>
+                    {% for prov in providers %}
+                        <option value="{{ prov.key }}" {% if provider_filter == prov.key %}selected{% endif %}>{{ prov.label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <div class="flex items-center gap-3">
+                <button type="submit" class="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-black shadow-lg shadow-brand/40 transition hover:bg-sky-400">🔍 Anwenden</button>
+                <a href="/sets/{{ set.set_nr }}" class="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/10">❌ Reset</a>
+            </div>
+        </form>
+    </section>
+
+    <section class="space-y-6">
+        <h3 class="text-lg font-semibold text-white">Listings</h3>
+        {% if items %}
+            <div class="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                {% for item in items %}
+                    <article class="rounded-2xl border border-white/10 bg-panel p-5 shadow-xl shadow-black/30 transition hover:border-brand/60">
+                        <div class="flex items-start justify-between gap-4">
+                            <div>
+                                <div class="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
+                                    <span class="rounded-full bg-white/10 px-2 py-0.5 text-white">{{ item.provider }}</span>
+                                    <span class="text-slate-500">{{ item.provider_item_id }}</span>
+                                </div>
+                                <h4 class="mt-2 text-base font-semibold text-white">
+                                    <a href="/items/{{ item.id }}" class="hover:text-brand transition">{{ item.title }}</a>
+                                </h4>
+                                <a href="{{ item.href }}" target="_blank" rel="noopener" class="mt-1 inline-flex items-center gap-1 text-xs text-slate-400 hover:text-brand">🔗 Direktlink</a>
+                            </div>
+                            <div class="text-right text-sm text-slate-300">
+                                <div class="font-semibold text-emerald-300">{{ item.best_price }}</div>
+                                <div class="text-xs text-slate-500">Gebot {{ item.current_bid or '-' }}<br>Sofort {{ item.current_buyout or '-' }}</div>
+                            </div>
+                        </div>
+                        <div class="mt-4 space-y-2 text-xs text-slate-400">
+                            <div class="flex flex-wrap gap-2">
+                                <span class="rounded-full bg-brand/10 px-3 py-1 text-brand">Score {{ '%.2f' % item.set.score }}</span>
+                                {% if item.set.manual_override %}<span class="rounded-full bg-orange-500/20 px-3 py-1 text-orange-300">Manuell</span>{% endif %}
+                                {% if item.set.original_score is not none %}<span class="rounded-full bg-white/10 px-3 py-1 text-slate-300">Orig {{ '%.2f' % item.set.original_score }}</span>{% endif %}
+                                {% if item.set.matched_number %}<span class="rounded-full bg-white/10 px-3 py-1 text-slate-300">Nr</span>{% endif %}
+                                {% if item.set.parts_difference is not none %}<span class="rounded-full bg-white/10 px-3 py-1 text-slate-300">Δ Teile {{ item.set.parts_difference }}</span>{% endif %}
+                                {% if item.set.name_score is not none %}<span class="rounded-full bg-white/10 px-3 py-1 text-slate-300">Name {{ '%.2f' % item.set.name_score }}</span>{% endif %}
+                            </div>
+                            <div class="flex items-center justify-between text-xs text-slate-500">
+                                <span>seit {{ item.first_seen_ts.strftime('%Y-%m-%d %H:%M') if item.first_seen_ts else '-' }}</span>
+                                <span>{{ item.last_seen_ts.strftime('%Y-%m-%d %H:%M') if item.last_seen_ts else '-' }}</span>
+                            </div>
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="rounded-2xl border border-dashed border-white/20 bg-slate-900/40 p-10 text-center text-slate-400">
+                Noch keine Listings, die diesem Set zugeordnet sind.
+            </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

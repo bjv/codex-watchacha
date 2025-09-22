@@ -5,7 +5,9 @@ from typing import List, Dict, Any, Tuple, Callable, Optional
 
 import yaml, httpx
 
-from db import Database, compile_cluster_patterns, extract_cluster_keys
+from rapidfuzz import fuzz, process
+
+from db import Database, SetMatchPayload, SetRecord
 from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 
 # =========================
@@ -14,6 +16,9 @@ from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 ITEM_ID_EBAY_RE = re.compile(r"/itm/(?:[^/]+/)?(?P<id>\d{9,15})")
 ITEM_ID_KA_RE   = re.compile(r"/s-anzeige/.*?/(\d+)")
 PRICE_RE        = re.compile(r"([\d\.\s,]+)\s*€|EUR\s*([\d\.\s,]+)")
+SET_NR_RE       = re.compile(r"\b\d{5,6}\b")
+PARTS_RE        = re.compile(r"(\d{2,4})\s*(teile|piece|pieces|pcs|stk|stück)", re.IGNORECASE)
+REQUEST_FAIL_IGNORES = ("liberty-metrics", "frontend-metrics", "googlesyndication", "organic-ad-tracking")
 
 
 def parse_eur(text: str) -> Tuple[Optional[int], str]:
@@ -32,6 +37,135 @@ def parse_eur(text: str) -> Tuple[Optional[int], str]:
     quantized = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     cents = int((quantized * 100).to_integral_value(rounding=ROUND_HALF_UP))
     return cents, f"{quantized:.2f} €"
+
+
+TRANSLATION_TABLE = str.maketrans({
+    "ä": "ae",
+    "ö": "oe",
+    "ü": "ue",
+    "ß": "ss",
+})
+
+
+def normalize_text(text: str) -> str:
+    lowered = text.lower().translate(TRANSLATION_TABLE)
+    lowered = re.sub(r"[^a-z0-9\s]", " ", lowered)
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def extract_set_numbers(text: str) -> List[str]:
+    return list({match.group(0) for match in SET_NR_RE.finditer(text)})
+
+
+def extract_parts_count(text: str) -> Optional[int]:
+    match = PARTS_RE.search(text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+class SetMatcher:
+    def __init__(self, records: List[SetRecord], *, threshold: float = 0.55) -> None:
+        self.records = records
+        self.records_by_nr = {record.set_nr: record for record in records}
+        self.normalized_names = {record.set_nr: normalize_text(record.name) for record in records}
+        self.threshold = threshold
+
+    def match(self, title: str) -> Optional[SetMatchPayload]:
+        if not title:
+            return None
+
+        normalized_title = normalize_text(title)
+        numbers = extract_set_numbers(title)
+        parts_in_title = extract_parts_count(title)
+
+        candidate_nrs = set()
+        for nr in numbers:
+            if nr in self.records_by_nr:
+                candidate_nrs.add(nr)
+
+        if len(candidate_nrs) < 3:
+            name_matches = process.extract(
+                normalized_title,
+                self.normalized_names,
+                scorer=fuzz.token_set_ratio,
+                limit=5,
+            )
+            for set_nr, score, _ in name_matches:
+                if score >= 50:
+                    candidate_nrs.add(set_nr)
+
+        best_score = 0.0
+        best_info: Optional[Tuple[str, float, bool, float, Optional[int]]] = None
+
+        for set_nr in candidate_nrs:
+            record = self.records_by_nr.get(set_nr)
+            if record is None:
+                continue
+
+            matched_number = set_nr in numbers
+            name_score = fuzz.token_set_ratio(normalized_title, self.normalized_names[set_nr]) / 100.0
+
+            parts_difference: Optional[int] = None
+            if parts_in_title is not None and record.parts is not None:
+                parts_difference = abs(record.parts - parts_in_title)
+
+            score = 0.0
+            if matched_number:
+                score += 0.6
+            score += 0.35 * name_score
+            if parts_difference is not None:
+                if parts_difference == 0:
+                    score += 0.1
+                elif parts_difference <= 5:
+                    score += 0.05
+
+            score = min(score, 1.0)
+
+            if score > best_score:
+                best_score = score
+                best_info = (set_nr, score, matched_number, name_score, parts_difference)
+
+        if not best_info:
+            return None
+
+        set_nr, score, matched_number, name_score, parts_difference = best_info
+
+        return SetMatchPayload(
+            set_nr=set_nr,
+            score=score,
+            matched_number=matched_number,
+            name_score=name_score,
+            parts_difference=parts_difference,
+            above_threshold=score >= self.threshold,
+        )
+
+
+def format_set_line(match: Optional[SetMatchPayload]) -> str:
+    if not match:
+        return "-"
+    status = "" if match.above_threshold else "?"
+    fragments = [f"{match.set_nr}{status} ({match.score:.2f})"]
+    details = []
+    if match.matched_number:
+        details.append("Nr")
+    if match.parts_difference is not None:
+        details.append(f"±{match.parts_difference}")
+    if details:
+        fragments.append("[" + ", ".join(details) + "]")
+    return " ".join(fragments)
+
+
+def handle_request_failed(request) -> None:
+    url = request.url or ""
+    if any(token in url for token in REQUEST_FAIL_IGNORES):
+        return
+    failure = request.failure if hasattr(request, "failure") else None
+    failure_text = failure if failure else ""
+    print(f"[reqfail] {request.method} {url} -> {failure_text}")
 
 def query_key(terms: List[str]) -> str:
     return "+".join(terms)
@@ -418,7 +552,7 @@ async def scrape_provider(
 # =========================
 # Run Loop
 # =========================
-async def run_once(browser, cfg, database: Database, cluster_patterns):
+async def run_once(browser, cfg, database: Database, set_matcher: SetMatcher):
     context = await browser.new_context(
         user_agent=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -429,7 +563,7 @@ async def run_once(browser, cfg, database: Database, cluster_patterns):
     )
     page = await context.new_page()
     page.on("pageerror", lambda e: print(f"[pageerror] {e}"))
-    page.on("requestfailed", lambda r: print(f"[reqfail] {r.method} {r.url} -> {r.failure if r.failure else ''}"))
+    page.on("requestfailed", handle_request_failed)
     page.on("response", lambda r: r.status >= 400 and print(f"[resp {r.status}] {r.url}"))
 
     # In-Memory De-Dup for a single run_once roundtrip
@@ -457,19 +591,19 @@ async def run_once(browser, cfg, database: Database, cluster_patterns):
                 for it in items:
                     if not it.get("id"):
                         continue
-                    cluster_keys = extract_cluster_keys(it.get("title", ""), cluster_patterns)
-                    if cluster_keys:
-                        it["cluster_keys"] = cluster_keys
+                    match_payload = set_matcher.match(it.get("title", ""))
+                    if match_payload:
+                        it["set_match_info"] = match_payload
                     payload = {
                         "provider_item_id": str(it.get("id")),
                         "title": it.get("title", ""),
                         "href": it.get("href", ""),
-                        "cluster_keys": cluster_keys,
                         "direct_buy": bool(it.get("direct_buy")),
                         "vb_flag": bool(it.get("vb_flag")),
                         "bid_cents": it.get("bid_cents"),
                         "buyout_cents": it.get("buyout_cents"),
                         "currency": it.get("currency", "EUR"),
+                        "set_match": match_payload if match_payload and match_payload.above_threshold else None,
                     }
                     try:
                         db_result = await database.upsert_item_and_snapshot(
@@ -490,6 +624,7 @@ async def run_once(browser, cfg, database: Database, cluster_patterns):
                             f"{it['title']}\n"
                             f"Gebot: {it.get('bid') or '-'}\n"
                             f"Sofort: {it.get('buyout') or '-'}\n"
+                            f"Set: {format_set_line(it.get('set_match_info'))}\n"
                             f"ID: {it['id']}"
                         )
                         gk = make_round_key(provider_key, it)
@@ -538,8 +673,9 @@ async def main():
                     except Exception as e:
                         print(f"[warn] config reload failed: {e} (verwende letzte gültige)")
 
-                    cluster_patterns = compile_cluster_patterns(((cfg.get("clusters") or {}).get("patterns")))
-                    await run_once(browser, cfg, database, cluster_patterns)
+                    set_records = await database.fetch_set_records()
+                    matcher = SetMatcher(set_records)
+                    await run_once(browser, cfg, database, matcher)
 
                     interval = int(cfg.get("interval_seconds", 60))
                     await asyncio.sleep(interval)

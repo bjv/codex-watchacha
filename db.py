@@ -1,31 +1,39 @@
+import csv
 import hashlib
 import json
-import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-from typing import Pattern
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Date,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
-    Table,
     Text,
     UniqueConstraint,
     delete,
+    func,
     insert,
     select,
+    text,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.orm import declarative_base, relationship, selectinload
+from sqlalchemy.exc import ProgrammingError
 
 
 Base = declarative_base()
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+SETS_CSV_PATH = PROJECT_ROOT / "artifacts" / "sets.csv"
 
 
 class Provider(Base):
@@ -35,15 +43,6 @@ class Provider(Base):
     label = Column(String(255), nullable=False)
 
     items = relationship("Item", back_populates="provider", cascade="all, delete-orphan")
-
-
-item_clusters_table = Table(
-    "item_clusters",
-    Base.metadata,
-    Column("item_id", BigInteger, ForeignKey("items.id", ondelete="CASCADE"), primary_key=True),
-    Column("cluster_key", String(128), ForeignKey("clusters.cluster_key", ondelete="CASCADE"), primary_key=True),
-    Column("created_ts", DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)),
-)
 
 
 class Item(Base):
@@ -61,10 +60,11 @@ class Item(Base):
     currency = Column(String(8), nullable=False, default="EUR")
     first_seen_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_seen_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    hidden = Column(Boolean, nullable=False, default=False)
 
     provider = relationship("Provider", back_populates="items")
     snapshots = relationship("Snapshot", back_populates="item", cascade="all, delete-orphan", order_by="Snapshot.observed_ts.desc()")
-    clusters = relationship("Cluster", secondary=item_clusters_table, back_populates="items")
+    set_match = relationship("ItemSetMatch", back_populates="item", uselist=False, cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("provider_key", "provider_item_id", name="uq_items_provider_item"),
@@ -91,13 +91,41 @@ class Snapshot(Base):
     )
 
 
-class Cluster(Base):
-    __tablename__ = "clusters"
+class Set(Base):
+    __tablename__ = "sets"
 
-    cluster_key = Column(String(128), primary_key=True)
+    set_nr = Column(String(32), primary_key=True)
+    name = Column(Text, nullable=False)
+    uvp_cents = Column(Integer, nullable=True)
+    release_date = Column(Date, nullable=True)
+    parts = Column(Integer, nullable=True)
+    category = Column(String(128), nullable=True)
+    era = Column(String(128), nullable=True)
+    series = Column(String(255), nullable=True)
+    features = Column(Text, nullable=True)
     created_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
-    items = relationship("Item", secondary=item_clusters_table, back_populates="clusters")
+    matches = relationship("ItemSetMatch", back_populates="set", cascade="all, delete-orphan")
+
+
+class ItemSetMatch(Base):
+    __tablename__ = "item_set_matches"
+
+    id = Column(BigInteger, primary_key=True)
+    item_id = Column(BigInteger, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, unique=True)
+    set_nr = Column(String(32), ForeignKey("sets.set_nr", ondelete="CASCADE"), nullable=False)
+    score = Column(Float, nullable=False)
+    name_score = Column(Float, nullable=True)
+    matched_number = Column(Boolean, nullable=False, default=False)
+    parts_difference = Column(Integer, nullable=True)
+    manual_override = Column(Boolean, nullable=False, default=False)
+    original_score = Column(Float, nullable=True)
+    created_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    item = relationship("Item", back_populates="set_match")
+    set = relationship("Set", back_populates="matches")
 
 
 @dataclass(slots=True)
@@ -108,34 +136,27 @@ class UpsertResult:
     changed_fields: Dict[str, Tuple[Any, Any]]
 
 
-DEFAULT_CLUSTER_PATTERNS: List[Pattern[str]] = [re.compile(r"\b\d{6}\b")]
+@dataclass(slots=True)
+class SetMatchPayload:
+    set_nr: str
+    score: float
+    matched_number: bool
+    name_score: float
+    parts_difference: Optional[int]
+    above_threshold: bool
 
 
-def compile_cluster_patterns(patterns: Optional[Sequence[str]]) -> List[Pattern[str]]:
-    compiled: List[Pattern[str]] = []
-    if patterns:
-        for pattern in patterns:
-            try:
-                compiled.append(re.compile(pattern))
-            except re.error:
-                continue
-    if not compiled:
-        compiled = DEFAULT_CLUSTER_PATTERNS.copy()
-    return compiled
-
-
-def extract_cluster_keys(title: str, patterns: Sequence[Pattern[str]]) -> List[str]:
-    if not title:
-        return []
-    values: List[str] = []
-    seen = set()
-    for pattern in patterns:
-        for match in pattern.finditer(title):
-            key = match.group(0)
-            if key not in seen:
-                seen.add(key)
-                values.append(key)
-    return values
+@dataclass(slots=True)
+class SetRecord:
+    set_nr: str
+    name: str
+    uvp_cents: Optional[int]
+    release_date: Optional[date]
+    parts: Optional[int]
+    category: Optional[str]
+    era: Optional[str]
+    series: Optional[str]
+    features: Optional[str]
 
 
 def _now_utc() -> datetime:
@@ -162,11 +183,12 @@ class Database:
             self.engine, expire_on_commit=False
         )
         self._provider_cache: Dict[str, str] = {}
-        self._cluster_cache: set[str] = set()
 
     async def init_models(self) -> None:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        await self._ensure_schema_updates()
+        await self._ensure_sets_seeded()
 
     async def dispose(self) -> None:
         await self.engine.dispose()
@@ -189,8 +211,6 @@ class Database:
                 changed_fields: Dict[str, Tuple[Any, Any]] = {}
                 is_new = item is None
 
-                cluster_keys_normalized = self._normalize_cluster_keys(payload.get("cluster_keys"))
-
                 if item is None:
                     item = Item(
                         provider_key=provider_key,
@@ -206,7 +226,7 @@ class Database:
                         last_seen_ts=now,
                     )
                     session.add(item)
-                    await session.flush()
+                    await session.flush([item])
 
                     changed_fields = {
                         "title": (None, item.title),
@@ -234,11 +254,16 @@ class Database:
 
                     item.last_seen_ts = now
 
-                await self._sync_item_clusters(session, item, cluster_keys_normalized)
+                await self._upsert_item_set_match(session, item, payload.get("set_match"))
 
                 last_fingerprint = None
                 if not is_new:
-                    stmt = select(Snapshot.fingerprint).where(Snapshot.item_id == item.id).order_by(Snapshot.observed_ts.desc()).limit(1)
+                    stmt = (
+                        select(Snapshot.fingerprint)
+                        .where(Snapshot.item_id == item.id)
+                        .order_by(Snapshot.observed_ts.desc())
+                        .limit(1)
+                    )
                     last_fingerprint = await session.scalar(stmt)
 
                 snapshot_created = is_new or (last_fingerprint != fp and bool(changed_fields))
@@ -265,6 +290,25 @@ class Database:
             changed_fields=changed_fields,
         )
 
+    async def fetch_set_records(self) -> List[SetRecord]:
+        async with self.session_factory() as session:
+            result = await session.execute(select(Set))
+            sets = result.scalars().all()
+            return [
+                SetRecord(
+                    set_nr=s.set_nr,
+                    name=s.name,
+                    uvp_cents=s.uvp_cents,
+                    release_date=s.release_date,
+                    parts=s.parts,
+                    category=s.category,
+                    era=s.era,
+                    series=s.series,
+                    features=s.features,
+                )
+                for s in sets
+            ]
+
     async def _ensure_provider(self, session: AsyncSession, provider_key: str, label: str) -> None:
         if provider_key in self._provider_cache:
             return
@@ -280,58 +324,197 @@ class Database:
     async def _get_item(self, session: AsyncSession, provider_key: str, provider_item_id: str) -> Optional[Item]:
         stmt = (
             select(Item)
+            .options(selectinload(Item.set_match).selectinload(ItemSetMatch.set))
             .where(Item.provider_key == provider_key, Item.provider_item_id == provider_item_id)
             .limit(1)
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
-    def _normalize_cluster_keys(self, keys: Optional[Sequence[str]]) -> List[str]:
-        if not keys:
-            return []
-        normalized: List[str] = []
-        seen = set()
-        for key in keys:
-            if not key:
-                continue
-            val = key.strip()
-            if not val or val in seen:
-                continue
-            seen.add(val)
-            normalized.append(val)
-        return normalized
-
-    async def _sync_item_clusters(self, session: AsyncSession, item: Item, cluster_keys: List[str]) -> None:
-        if cluster_keys is None:
+    async def _upsert_item_set_match(
+        self,
+        session: AsyncSession,
+        item: Item,
+        match_payload: Optional[SetMatchPayload],
+    ) -> None:
+        existing = await session.scalar(
+            select(ItemSetMatch).where(ItemSetMatch.item_id == item.id)
+        )
+        if match_payload is None or not match_payload.above_threshold:
+            if existing is not None and not existing.manual_override:
+                await session.delete(existing)
             return
 
-        stmt = select(item_clusters_table.c.cluster_key).where(item_clusters_table.c.item_id == item.id)
-        result = await session.execute(stmt)
-        existing_keys = {row[0] for row in result.fetchall()}
-        desired_keys = set(cluster_keys)
+        set_obj = await session.get(Set, match_payload.set_nr)
+        if not set_obj:
+            return
 
-        to_add = desired_keys - existing_keys
-        to_remove = existing_keys - desired_keys
+        if existing is None:
+            match = ItemSetMatch(
+                item=item,
+                set=set_obj,
+                score=match_payload.score,
+                name_score=match_payload.name_score,
+                matched_number=match_payload.matched_number,
+                parts_difference=match_payload.parts_difference,
+                manual_override=False,
+                original_score=None,
+            )
+            session.add(match)
+        else:
+            if existing.manual_override:
+                return
+            existing.set = set_obj
+            existing.score = match_payload.score
+            existing.name_score = match_payload.name_score
+            existing.matched_number = match_payload.matched_number
+            existing.parts_difference = match_payload.parts_difference
+            existing.manual_override = False
+            existing.original_score = None
 
-        if to_add:
-            for key in to_add:
-                await self._ensure_cluster(session, key)
-                await session.execute(
-                    insert(item_clusters_table).values(item_id=item.id, cluster_key=key)
+    async def _ensure_sets_seeded(self) -> None:
+        if not SETS_CSV_PATH.exists():
+            return
+
+        async with self.session_factory() as session:
+            async with session.begin():
+                total_sets = await session.scalar(select(func.count(Set.set_nr)))
+                if total_sets and total_sets > 0:
+                    return
+                await self._import_sets_from_csv(session, SETS_CSV_PATH)
+
+    async def _import_sets_from_csv(self, session: AsyncSession, path: Path) -> None:
+        with path.open("r", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh, delimiter=";")
+            rows = list(reader)
+
+        for row in rows:
+            set_nr = (row.get("SetNr") or "").strip()
+            if not set_nr:
+                continue
+
+            name = (row.get("Name") or "").strip()
+            uvp_cents = _parse_price_to_cents(row.get("UVP_EUR"))
+            release_date = _parse_release_date(row.get("Erscheinungsdatum"))
+            parts = _parse_int(row.get("Teile"))
+            category = _clean_text(row.get("Kategorie"))
+            era = _clean_text(row.get("Ära"))
+            series = _clean_text(row.get("Serie_Film"))
+            features = _clean_text(row.get("Besonderheiten"))
+
+            session.add(
+                Set(
+                    set_nr=set_nr,
+                    name=name,
+                    uvp_cents=uvp_cents,
+                    release_date=release_date,
+                    parts=parts,
+                    category=category,
+                    era=era,
+                    series=series,
+                    features=features,
                 )
-
-        if to_remove:
-            await session.execute(
-                delete(item_clusters_table)
-                .where(item_clusters_table.c.item_id == item.id)
-                .where(item_clusters_table.c.cluster_key.in_(to_remove))
             )
 
-    async def _ensure_cluster(self, session: AsyncSession, cluster_key: str) -> Cluster:
-        cluster = await session.get(Cluster, cluster_key)
-        if cluster is None:
-            cluster = Cluster(cluster_key=cluster_key)
-            session.add(cluster)
-            await session.flush([cluster])
-        self._cluster_cache.add(cluster_key)
-        return cluster
+    async def assign_manual_set(self, item_id: int, set_nr: str) -> None:
+        async with self.session_factory() as session:
+            async with session.begin():
+                item = await session.get(Item, item_id, options=[selectinload(Item.set_match)])
+                if item is None:
+                    raise ValueError("Item not found")
+                set_obj = await session.get(Set, set_nr)
+                if set_obj is None:
+                    raise ValueError("Set not found")
+
+                match = item.set_match
+                if match is None:
+                    match = ItemSetMatch(
+                        item=item,
+                        set=set_obj,
+                        score=1.0,
+                        name_score=1.0,
+                        matched_number=True,
+                        parts_difference=0,
+                        manual_override=True,
+                        original_score=None,
+                    )
+                    session.add(match)
+                else:
+                    if not match.manual_override and match.original_score is None:
+                        match.original_score = match.score
+                    match.set = set_obj
+                    match.score = 1.0
+                    match.name_score = 1.0
+                    match.matched_number = True
+                    match.parts_difference = 0
+                    match.manual_override = True
+
+    async def clear_set_match(self, item_id: int) -> None:
+        async with self.session_factory() as session:
+            async with session.begin():
+                match = await session.scalar(select(ItemSetMatch).where(ItemSetMatch.item_id == item_id))
+                if match is not None:
+                    await session.delete(match)
+
+    async def set_item_hidden(self, item_id: int, hidden: bool) -> None:
+        async with self.session_factory() as session:
+            async with session.begin():
+                item = await session.get(Item, item_id)
+                if item is None:
+                    raise ValueError("Item not found")
+                item.hidden = hidden
+
+    async def _ensure_schema_updates(self) -> None:
+        statements = [
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE item_set_matches ADD COLUMN IF NOT EXISTS manual_override BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE item_set_matches ADD COLUMN IF NOT EXISTS original_score DOUBLE PRECISION",
+        ]
+        async with self.engine.begin() as conn:
+            for stmt in statements:
+                try:
+                    await conn.execute(text(stmt))
+                except Exception:
+                    pass
+
+
+def _parse_price_to_cents(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    try:
+        return int((Decimal(str(value).replace(",", ".")) * 100).to_integral_value())
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _parse_release_date(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m", "%Y-%m-%d", "%Y"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            if fmt == "%Y":
+                return date(dt.year, 1, 1)
+            return dt.date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_int(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    try:
+        return int(str(value).strip())
+    except ValueError:
+        return None
+
+
+def _clean_text(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    text = value.strip()
+    return text or None

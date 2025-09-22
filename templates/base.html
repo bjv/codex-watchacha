@@ -1,354 +1,63 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="de" class="h-full">
 <head>
     <meta charset="utf-8">
     <title>{% block title %}Watchacha Dashboard{% endblock %}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        :root {
-            color-scheme: dark light;
-            --bg: #11151c;
-            --fg: #f5f7fa;
-            --accent: #0099ff;
-            --muted: #738091;
-            --col-provider: 130px;
-            --col-title: auto;
-            --col-price: 120px;
-            --col-flags: 110px;
-            --col-cluster: 160px;
-            --col-seen: 160px;
-            font-family: "Inter", "Segoe UI", system-ui, sans-serif;
-        }
-        body {
-            margin: 0;
-            padding: 0;
-            background: var(--bg);
-            color: var(--fg);
-        }
-        header {
-            background: rgba(0, 0, 0, 0.4);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            padding: 16px 24px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        header h1 {
-            margin: 0;
-            font-size: 1.25rem;
-        }
-        nav a {
-            color: var(--fg);
-            margin-right: 16px;
-            text-decoration: none;
-            font-weight: 500;
-        }
-        nav a.active {
-            color: var(--accent);
-        }
-        main {
-            padding: 24px;
-            max-width: 1100px;
-            margin: 0 auto;
-        }
-        form.filters {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 12px;
-            margin-bottom: 24px;
-            background: rgba(255, 255, 255, 0.04);
-            padding: 16px;
-            border-radius: 12px;
-        }
-        label {
-            display: flex;
-            flex-direction: column;
-            font-size: 0.85rem;
-            gap: 4px;
-        }
-        input[type="text"],
-        select,
-        input[type="number"],
-        button {
-            font: inherit;
-            padding: 8px 10px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(0, 0, 0, 0.2);
-            color: var(--fg);
-        }
-        button {
-            cursor: pointer;
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            font-weight: 600;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            table-layout: fixed;
-        }
-        th, td {
-            padding: 10px 12px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            text-align: left;
-            vertical-align: top;
-            overflow-wrap: anywhere;
-        }
-        th {
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--muted);
-        }
-        th .sortable {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            color: inherit;
-            text-decoration: none;
-        }
-        th .sortable.active {
-            color: var(--accent);
-            font-weight: 600;
-        }
-        .col-provider {
-            width: var(--col-provider);
-            white-space: nowrap;
-        }
-        .col-title {
-            width: var(--col-title);
-        }
-        .col-price {
-            width: var(--col-price);
-            white-space: nowrap;
-        }
-        .col-flags {
-            width: var(--col-flags);
-            white-space: nowrap;
-        }
-        .col-cluster {
-            width: var(--col-cluster);
-        }
-        .col-seen {
-            width: var(--col-seen);
-            white-space: nowrap;
-        }
-        tr:hover {
-            background: rgba(255, 255, 255, 0.04);
-        }
-        a {
-            color: var(--accent);
-        }
-        small {
-            color: var(--muted);
-            display: block;
-            margin-top: 4px;
-            font-size: 0.75rem;
-        }
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 2px 6px;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            background: rgba(0, 153, 255, 0.2);
-            color: var(--accent);
-            margin-right: 6px;
-        }
-        .badge.delta {
-            background: rgba(255, 170, 0, 0.2);
-            color: #ffcf66;
-        }
-        .muted {
-            color: var(--muted);
-        }
-        .back-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            margin-bottom: 16px;
-            color: var(--accent);
-            text-decoration: none;
-            font-weight: 600;
-        }
-        .item-header {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            margin-bottom: 24px;
-        }
-        .item-header .item-links a {
-            color: var(--accent);
-            text-decoration: none;
-            font-weight: 500;
-        }
-        .cluster-badges {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-top: 8px;
-        }
-        .detail-grid {
-            display: grid;
-            grid-template-columns: minmax(240px, 280px) 1fr;
-            gap: 24px;
-            align-items: flex-start;
-        }
-        .snapshot-list {
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
-            padding: 16px;
-        }
-        .snapshot-list h3 {
-            margin: 0;
-            font-size: 1rem;
-        }
-        .snapshot-list ul {
-            list-style: none;
-            margin: 12px 0 0 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        .snapshot-list li a {
-            display: block;
-            padding: 12px;
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            text-decoration: none;
-            color: inherit;
-            background: rgba(0, 0, 0, 0.2);
-            transition: border-color 0.2s ease, background 0.2s ease;
-        }
-        .snapshot-list li a:hover {
-            border-color: rgba(0, 153, 255, 0.4);
-        }
-        .snapshot-list li.active a {
-            border-color: rgba(0, 153, 255, 0.6);
-            background: rgba(0, 153, 255, 0.18);
-        }
-        .snapshot-time {
-            font-size: 0.9rem;
-            font-weight: 600;
-        }
-        .snapshot-prices {
-            margin-top: 4px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            font-size: 0.85rem;
-        }
-        .snapshot-changes {
-            margin-top: 6px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-        .snapshot-detail {
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
-            padding: 20px;
-        }
-        .snapshot-detail h3 {
-            margin-top: 0;
-        }
-        .field-grid {
-            display: grid;
-            gap: 12px;
-        }
-        .field-row {
-            padding: 12px;
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            background: rgba(0, 0, 0, 0.25);
-        }
-        .field-row.changed {
-            border-color: rgba(0, 153, 255, 0.45);
-            box-shadow: 0 0 0 1px rgba(0, 153, 255, 0.2);
-        }
-        .field-label {
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--muted);
-            margin-bottom: 4px;
-        }
-        .field-current {
-            font-weight: 600;
-            font-size: 1rem;
-        }
-        .field-previous {
-            margin-top: 4px;
-            font-size: 0.8rem;
-            color: #ffcf66;
-        }
-        footer {
-            margin-top: 48px;
-            text-align: center;
-            color: var(--muted);
-            font-size: 0.75rem;
-        }
-        @media (max-width: 720px) {
-            main {
-                padding: 16px;
-            }
-            header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 12px;
-            }
-            nav a {
-                margin-right: 12px;
-                font-size: 0.95rem;
-            }
-            table {
-                font-size: 0.9rem;
-            }
-            th, td {
-                padding: 8px;
-            }
-            .detail-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-    </style>
-</head>
-<body>
-    <header>
-        <h1>Watchacha Dashboard</h1>
-        <nav>
-            <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Listings</a>
-            <a href="/clusters" class="{% if request.url.path.startswith('/clusters') %}active{% endif %}">Cluster</a>
-        </nav>
-    </header>
-    <main>
-        {% block content %}{% endblock %}
-    </main>
-    <footer>
-        Stand: {{ now.strftime('%Y-%m-%d %H:%M') }} UTC
-    </footer>
+    <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            document.querySelectorAll('form.filters').forEach(form => {
-                form.querySelectorAll('select, input[type="number"]').forEach(el => {
-                    el.addEventListener('change', () => form.submit());
-                });
-                form.querySelectorAll('input[type="text"]').forEach(el => {
-                    el.addEventListener('keydown', event => {
-                        if (event.key === 'Enter') {
-                            event.preventDefault();
-                            form.submit();
-                        }
-                    });
-                });
-            });
-        });
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'Segoe UI', 'system-ui', 'sans-serif'],
+            },
+            colors: {
+              brand: '#38bdf8',
+              surface: '#0f172a',
+              panel: 'rgba(15, 23, 42, 0.85)',
+            },
+          },
+        },
+      }
     </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 font-sans">
+    <div class="relative overflow-hidden">
+        <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),transparent_60%),radial-gradient(circle_at_bottom,_rgba(99,102,241,0.16),transparent_60%)]"></div>
+        <div class="relative min-h-screen flex flex-col">
+            <header class="border-b border-white/10 bg-slate-950/70 backdrop-blur">
+                <div class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-5">
+                    <div>
+                        <h1 class="text-2xl font-semibold tracking-tight text-white">Watchacha</h1>
+                        <p class="text-sm text-slate-400">BlueBrixx Set Tracker</p>
+                    </div>
+                    <nav class="flex flex-wrap items-center gap-2 text-sm">
+                        {% set path = request.url.path %}
+                        <a href="/" class="px-4 py-2 rounded-full border transition {{ 'bg-brand text-black border-transparent shadow-lg shadow-brand/40' if path == '/' else 'border-white/10 text-slate-200 hover:bg-white/10' }}">Listings</a>
+                        <a href="/sets" class="px-4 py-2 rounded-full border transition {{ 'bg-brand text-black border-transparent shadow-lg shadow-brand/40' if path.startswith('/sets') and not path.startswith('/sets/catalog') else 'border-white/10 text-slate-200 hover:bg-white/10' }}">Sets</a>
+                        <a href="/sets/catalog" class="px-4 py-2 rounded-full border transition {{ 'bg-brand text-black border-transparent shadow-lg shadow-brand/40' if path.startswith('/sets/catalog') else 'border-white/10 text-slate-200 hover:bg-white/10' }}">Set-Katalog</a>
+                    </nav>
+                </div>
+            </header>
+
+            <main class="flex-1 w-full">
+                <div class="mx-auto w-full max-w-7xl px-6 py-10">
+                    {% block content %}{% endblock %}
+                </div>
+            </main>
+
+            <footer class="border-t border-white/5 bg-slate-950/80">
+                <div class="mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-4 text-xs text-slate-500">
+                    <span>Watchacha • Live Set Tracking</span>
+                    <span>Stand: {{ now.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+                </div>
+            </footer>
+        </div>
+    </div>
 </body>
 </html>
