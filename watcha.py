@@ -603,6 +603,7 @@ async def run_once(browser, cfg, database: Database, set_matcher: SetMatcher):
                         "bid_cents": it.get("bid_cents"),
                         "buyout_cents": it.get("buyout_cents"),
                         "currency": it.get("currency", "EUR"),
+                        "availability": "active",
                         "set_match": match_payload if match_payload and match_payload.above_threshold else None,
                     }
                     try:

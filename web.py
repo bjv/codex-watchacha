@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db import (
+    COMPLETED_AVAILABILITIES,
+    DEFAULT_AVAILABILITY,
     Database,
     Item,
     ItemSetMatch,
@@ -62,6 +64,20 @@ SORT_CONFIGS = {
     },
 }
 
+AVAILABILITY_LABELS = {
+    "active": "Aktiv",
+    "reserved": "Reserviert",
+    "deleted": "Gelöscht",
+    "sold": "Verkauft",
+    "unsold": "Beendet",
+    "unknown": "Unbekannt",
+}
+
+SNAPSHOT_SOURCE_LABELS = {
+    "scrape": "Suche",
+    "revisit": "Revisit",
+}
+
 
 def _cents_to_eur(cents: Optional[int]) -> str:
     if cents is None:
@@ -74,6 +90,16 @@ def _format_date(value: Optional[Any]) -> str:
     if not value:
         return "-"
     return value.strftime("%Y-%m-%d")
+
+
+def _availability_label(value: Optional[str]) -> str:
+    normalized = value or DEFAULT_AVAILABILITY
+    return AVAILABILITY_LABELS.get(normalized, normalized.replace("_", " ").title())
+
+
+def _snapshot_source_label(value: Optional[str]) -> str:
+    normalized = (value or "scrape").strip().lower()
+    return SNAPSHOT_SOURCE_LABELS.get(normalized, normalized.replace("_", " ").title())
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -211,10 +237,14 @@ def _display_snapshot_field(field: str, snapshot: Optional[Snapshot]) -> str:
     if not snapshot:
         return "-"
     value = getattr(snapshot, field, None)
+    if field == "availability":
+        return _availability_label(value)
     if field.endswith("_cents"):
         return _cents_to_eur(value)
     if field in {"direct_buy", "vb_flag"}:
         return "Ja" if value else "Nein"
+    if field == "note":
+        return value.strip() if isinstance(value, str) and value.strip() else "-"
     if value is None or value == "":
         return "-"
     return str(value)
@@ -235,6 +265,8 @@ def _snapshot_changes(current: Snapshot, previous: Optional[Snapshot]) -> List[D
 def _serialize_item(row: Any) -> Dict[str, Any]:
     item: Item = row.Item
     best_price_cents = _best_price(item)
+    availability_value = item.availability or DEFAULT_AVAILABILITY
+    completed_flag = bool(item.completed) or (availability_value in COMPLETED_AVAILABILITIES)
     set_info = None
     if row.set_nr:
         set_info = {
@@ -266,6 +298,11 @@ def _serialize_item(row: Any) -> Dict[str, Any]:
         "currency": item.currency,
         "first_seen_ts": item.first_seen_ts,
         "last_seen_ts": item.last_seen_ts,
+        "availability": availability_value,
+        "availability_label": _availability_label(availability_value),
+        "completed": completed_flag,
+        "completed_ts": item.completed_ts if completed_flag else None,
+        "last_revisit_ts": item.last_revisit_ts,
         "hidden": bool(getattr(row, "hidden", False)),
         "set": set_info,
     }
@@ -627,6 +664,11 @@ async def item_detail(
             "observed_ts": snap.observed_ts,
             "buyout": _cents_to_eur(snap.buyout_cents),
             "bid": _cents_to_eur(snap.bid_cents),
+            "availability": snap.availability,
+            "availability_label": _availability_label(snap.availability),
+            "note": snap.note,
+            "source": snap.source,
+            "source_label": _snapshot_source_label(snap.source),
             "changes": _snapshot_changes(snap, prev),
             "is_selected": snap.id == selected_snapshot.id,
         }
@@ -690,6 +732,8 @@ async def item_detail(
 
 def _serialize_item_from_detail(item: Item, provider_label: str, set_match: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     best_price_cents = _best_price(item)
+    availability_value = item.availability or DEFAULT_AVAILABILITY
+    completed_flag = bool(item.completed) or (availability_value in COMPLETED_AVAILABILITIES)
     return {
         "id": item.id,
         "provider": provider_label,
@@ -699,6 +743,11 @@ def _serialize_item_from_detail(item: Item, provider_label: str, set_match: Opti
         "first_seen_ts": item.first_seen_ts,
         "last_seen_ts": item.last_seen_ts,
         "best_price": _cents_to_eur(best_price_cents),
+        "availability": availability_value,
+        "availability_label": _availability_label(availability_value),
+        "completed": completed_flag,
+        "completed_ts": item.completed_ts if completed_flag else None,
+        "last_revisit_ts": item.last_revisit_ts,
         "set": set_match,
         "hidden": item.hidden,
     }
@@ -808,8 +857,10 @@ async def api_sets(
     return JSONResponse({"sets": sets, "count": len(sets)})
 SNAPSHOT_FIELDS = [
     ("title", "Titel"),
+    ("availability", "Verfügbarkeit"),
     ("direct_buy", "Direkt kaufen"),
     ("vb_flag", "Verhandlung"),
     ("buyout_cents", "Sofortpreis"),
     ("bid_cents", "Gebotspreis"),
+    ("note", "Notiz"),
 ]

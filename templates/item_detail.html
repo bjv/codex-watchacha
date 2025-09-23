@@ -13,6 +13,16 @@
                     <span class="rounded-full bg-white/10 px-3 py-1 text-white">{{ item.provider }}</span>
                     <span class="text-slate-500">{{ item.provider_item_id }}</span>
                     {% if item.hidden %}<span class="rounded-full bg-orange-500/20 px-3 py-1 text-orange-300">Versteckt</span>{% endif %}
+                    {% if item.completed %}
+                        <span class="rounded-full bg-rose-500/20 px-3 py-1 text-rose-200">Abgeschlossen</span>
+                    {% elif item.availability != 'active' %}
+                        <span class="rounded-full bg-amber-500/20 px-3 py-1 text-amber-200">{{ item.availability_label }}</span>
+                    {% else %}
+                        <span class="rounded-full bg-emerald-500/20 px-3 py-1 text-emerald-200">{{ item.availability_label }}</span>
+                    {% endif %}
+                    {% if item.last_revisit_ts %}
+                        <span class="rounded-full bg-white/10 px-3 py-1 text-slate-300">Revisit {{ item.last_revisit_ts.strftime('%Y-%m-%d %H:%M') }}</span>
+                    {% endif %}
                 </div>
                 <h1 class="text-2xl font-semibold text-white">{{ item.title }}</h1>
                 <div class="flex flex-wrap items-center gap-3 text-sm text-slate-300">
@@ -28,8 +38,10 @@
                         {% if item.set.original_score is not none %}<span class="rounded-full bg-white/10 px-3 py-1 text-slate-200">Orig {{ '%.2f' % item.set.original_score }}</span>{% endif %}
                     </div>
                 {% endif %}
-                <div class="text-xs text-slate-500">
-                    Erst gesehen: {{ item.first_seen_ts.strftime('%Y-%m-%d %H:%M') if item.first_seen_ts else '-' }} – Letzte Aktualisierung: {{ item.last_seen_ts.strftime('%Y-%m-%d %H:%M') if item.last_seen_ts else '-' }}
+                <div class="text-xs text-slate-500 flex flex-wrap gap-3">
+                    <span>Erst gesehen: {{ item.first_seen_ts.strftime('%Y-%m-%d %H:%M') if item.first_seen_ts else '-' }}</span>
+                    <span>Letzte Aktualisierung: {{ item.last_seen_ts.strftime('%Y-%m-%d %H:%M') if item.last_seen_ts else '-' }}</span>
+                    <span>Letzter Revisit: {{ item.last_revisit_ts.strftime('%Y-%m-%d %H:%M') if item.last_revisit_ts else '-' }}</span>
                 </div>
             </div>
         </div>
@@ -80,6 +92,11 @@
                             <div class="mt-1 flex flex-wrap gap-2 text-xs text-slate-400">
                                 {% if snap.buyout != '-' %}<span>💶 {{ snap.buyout }}</span>{% endif %}
                                 {% if snap.bid != '-' %}<span>🪙 {{ snap.bid }}</span>{% endif %}
+                                {% set avail = snap.availability %}
+                                {% if avail %}
+                                    <span class="rounded-full px-2 py-0.5 {% if avail == 'active' %}bg-emerald-500/20 text-emerald-200{% elif avail in ['sold', 'deleted'] %}bg-rose-500/20 text-rose-200{% elif avail == 'reserved' %}bg-amber-500/20 text-amber-200{% else %}bg-white/10 text-slate-200{% endif %}">{{ snap.availability_label }}</span>
+                                {% endif %}
+                                <span class="rounded-full bg-white/10 px-2 py-0.5 text-slate-300">{{ snap.source_label }}</span>
                             </div>
                             {% if snap.changes %}
                                 <div class="mt-2 flex flex-wrap gap-2">
@@ -87,6 +104,9 @@
                                         <span class="rounded-full bg-orange-500/20 px-2 py-0.5 text-xs text-orange-300">Δ {{ change.label }}</span>
                                     {% endfor %}
                                 </div>
+                            {% endif %}
+                            {% if snap.note %}
+                                <div class="mt-2 text-xs text-slate-400">{{ snap.note }}</div>
                             {% endif %}
                         </a>
                     </li>
@@ -122,7 +142,7 @@
             </div>
             <div class="mt-4 grid gap-4">
                 {% for row in detail_rows %}
-                    {% if row.field in ['vb_flag', 'direct_buy'] %}
+                    {% if row.field in ['availability', 'vb_flag', 'direct_buy'] %}
                         <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 flex flex-wrap items-center justify-between">
                             <div>
                                 <div class="text-xs uppercase tracking-wide text-slate-500">{{ row.label }}</div>
@@ -130,6 +150,14 @@
                             </div>
                             {% if row.changed and row.previous and row.previous != row.current %}
                                 <div class="text-xs text-amber-300">Vorher: {{ row.previous }}</div>
+                            {% endif %}
+                        </div>
+                    {% elif row.field == 'note' %}
+                        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4">
+                            <div class="text-xs uppercase tracking-wide text-slate-500">{{ row.label }}</div>
+                            <div class="mt-2 text-sm text-slate-200">{{ row.current }}</div>
+                            {% if row.changed and row.previous and row.previous != row.current %}
+                                <div class="mt-2 text-xs text-amber-300">Vorher: {{ row.previous }}</div>
                             {% endif %}
                         </div>
                     {% endif %}

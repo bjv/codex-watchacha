@@ -74,6 +74,17 @@
                                 <span class="rounded-full bg-white/10 px-2 py-0.5 text-white">{{ item.provider }}</span>
                                 <span class="text-slate-500">{{ item.provider_item_id }}</span>
                                 {% if item.hidden %}<span class="rounded-full bg-orange-500/20 px-2 py-0.5 text-orange-300">Versteckt</span>{% endif %}
+                                {% set avail = item.availability %}
+                                {% if item.completed %}
+                                    <span class="rounded-full bg-rose-500/20 px-2 py-0.5 text-rose-200">Abgeschlossen</span>
+                                {% elif avail != 'active' %}
+                                    <span class="rounded-full bg-amber-500/20 px-2 py-0.5 text-amber-200">{{ item.availability_label }}</span>
+                                {% else %}
+                                    <span class="rounded-full bg-emerald-500/20 px-2 py-0.5 text-emerald-200">{{ item.availability_label }}</span>
+                                {% endif %}
+                                {% if item.last_revisit_ts %}
+                                    <span class="rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300">Revisit {{ item.last_revisit_ts.strftime('%Y-%m-%d %H:%M') }}</span>
+                                {% endif %}
                             </div>
                             <h3 class="text-lg font-semibold text-white">
                                 <a href="/items/{{ item.id }}" class="hover:text-brand transition">{{ item.title }}</a>
@@ -117,9 +128,10 @@
                             </div>
                         {% endif %}
 
-                        <div class="flex items-center justify-between text-xs text-slate-500">
+                        <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
                             <span>Seit {{ item.first_seen_ts.strftime('%Y-%m-%d %H:%M') if item.first_seen_ts else '-' }}</span>
                             <span>Aktualisiert {{ item.last_seen_ts.strftime('%Y-%m-%d %H:%M') if item.last_seen_ts else '-' }}</span>
+                            <span>Revisit {{ item.last_revisit_ts.strftime('%Y-%m-%d %H:%M') if item.last_revisit_ts else '-' }}</span>
                         </div>
                     </div>
                 </article>

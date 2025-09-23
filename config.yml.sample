@@ -25,3 +25,12 @@ searches:
   - name: Generische Suche
     terms:
       - bluebrixx
+
+revisit:
+  stale_days: 7
+  batch_size: 10
+  interval_seconds: 900
+  navigation_timeout_ms: 20000
+  providers:
+    - kleinanzeigen
+    - ebay

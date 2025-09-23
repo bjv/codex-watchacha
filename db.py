@@ -19,9 +19,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    delete,
     func,
-    insert,
+    case,
     select,
     text,
 )
@@ -34,6 +33,9 @@ Base = declarative_base()
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SETS_CSV_PATH = PROJECT_ROOT / "artifacts" / "sets.csv"
+
+DEFAULT_AVAILABILITY = "active"
+COMPLETED_AVAILABILITIES = {"deleted", "sold", "unsold"}
 
 
 class Provider(Base):
@@ -58,8 +60,12 @@ class Item(Base):
     current_bid_cents = Column(Integer, nullable=True)
     current_buyout_cents = Column(Integer, nullable=True)
     currency = Column(String(8), nullable=False, default="EUR")
+    availability = Column(String(32), nullable=False, default="active")
+    completed = Column(Boolean, nullable=False, default=False)
+    completed_ts = Column(DateTime(timezone=True), nullable=True)
     first_seen_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_seen_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    last_revisit_ts = Column(DateTime(timezone=True), nullable=True)
     hidden = Column(Boolean, nullable=False, default=False)
 
     provider = relationship("Provider", back_populates="items")
@@ -81,6 +87,9 @@ class Snapshot(Base):
     buyout_cents = Column(Integer, nullable=True)
     direct_buy = Column(Boolean, nullable=False, default=False)
     vb_flag = Column(Boolean, nullable=False, default=False)
+    availability = Column(String(32), nullable=False, default="active")
+    source = Column(String(32), nullable=False, default="scrape")
+    note = Column(Text, nullable=True)
     title = Column(Text, nullable=False)
     fingerprint = Column(String(64), nullable=False)
 
@@ -159,6 +168,19 @@ class SetRecord:
     features: Optional[str]
 
 
+@dataclass(slots=True)
+class RevisitCandidate:
+    item_id: int
+    provider_key: str
+    provider_label: Optional[str]
+    provider_item_id: str
+    href: str
+    title: str
+    availability: str
+    last_seen_ts: datetime
+    last_revisit_ts: Optional[datetime]
+
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -169,6 +191,7 @@ def _fingerprint_payload(data: Dict[str, Any]) -> str:
         "buyout": data.get("buyout_cents"),
         "direct_buy": bool(data.get("direct_buy")),
         "vb_flag": bool(data.get("vb_flag")),
+        "availability": (data.get("availability") or DEFAULT_AVAILABILITY),
         "title": (data.get("title") or "").strip().casefold(),
     }
     encoded = json.dumps(fingerprint_fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -201,6 +224,15 @@ class Database:
     ) -> UpsertResult:
         now = _now_utc()
         provider_label = provider_label or provider_key
+        payload = dict(payload)
+        availability = payload.get("availability", DEFAULT_AVAILABILITY)
+        payload.setdefault("availability", availability)
+        completed_flag = bool(payload.get("completed", availability in COMPLETED_AVAILABILITIES))
+        completed_ts = payload.get("completed_ts")
+        if completed_flag and completed_ts is None:
+            completed_ts = now
+        snapshot_note = payload.get("snapshot_note")
+        snapshot_source = payload.get("snapshot_source", "scrape")
         fp = _fingerprint_payload(payload)
 
         async with self.session_factory() as session:
@@ -222,6 +254,9 @@ class Database:
                         current_bid_cents=payload.get("bid_cents"),
                         current_buyout_cents=payload.get("buyout_cents"),
                         currency=payload.get("currency", "EUR"),
+                        availability=availability,
+                        completed=completed_flag,
+                        completed_ts=completed_ts,
                         first_seen_ts=now,
                         last_seen_ts=now,
                     )
@@ -234,6 +269,8 @@ class Database:
                         "vb_flag": (None, item.vb_flag),
                         "current_bid_cents": (None, item.current_bid_cents),
                         "current_buyout_cents": (None, item.current_buyout_cents),
+                        "availability": (None, item.availability),
+                        "completed": (None, item.completed),
                     }
                 else:
                     updates = {
@@ -244,13 +281,21 @@ class Database:
                         "current_bid_cents": payload.get("bid_cents"),
                         "current_buyout_cents": payload.get("buyout_cents"),
                         "currency": payload.get("currency", "EUR"),
+                        "availability": availability,
                     }
                     for attr, new_val in updates.items():
                         old_val = getattr(item, attr)
                         if old_val != new_val:
                             setattr(item, attr, new_val)
-                            if attr in {"title", "direct_buy", "vb_flag", "current_bid_cents", "current_buyout_cents"}:
+                            if attr in {"title", "direct_buy", "vb_flag", "current_bid_cents", "current_buyout_cents", "availability"}:
                                 changed_fields[attr] = (old_val, new_val)
+
+                    if item.completed != completed_flag or (
+                        completed_flag and completed_ts is not None and item.completed_ts != completed_ts
+                    ):
+                        changed_fields["completed"] = (item.completed, completed_flag)
+                        item.completed = completed_flag
+                        item.completed_ts = completed_ts
 
                     item.last_seen_ts = now
 
@@ -276,6 +321,9 @@ class Database:
                         buyout_cents=payload.get("buyout_cents"),
                         direct_buy=bool(payload.get("direct_buy")),
                         vb_flag=bool(payload.get("vb_flag")),
+                        availability=availability,
+                        source=snapshot_source,
+                        note=snapshot_note,
                         title=payload["title"],
                         fingerprint=fp,
                     )
@@ -308,6 +356,56 @@ class Database:
                 )
                 for s in sets
             ]
+
+    async def fetch_revisit_candidates(
+        self,
+        *,
+        providers: Sequence[str],
+        stale_before: datetime,
+        limit: int,
+    ) -> List[RevisitCandidate]:
+        if limit <= 0:
+            return []
+
+        async with self.session_factory() as session:
+            stmt = (
+                select(Item, Provider.label.label("provider_label"))
+                .join(Provider, Provider.key == Item.provider_key)
+                .where(Item.last_seen_ts <= stale_before, Item.completed.is_(False))
+            )
+            if providers:
+                stmt = stmt.where(Item.provider_key.in_(providers))
+
+            nulls_first = case((Item.last_revisit_ts.is_(None), 0), else_=1)
+            stmt = (
+                stmt.order_by(
+                    nulls_first,
+                    Item.last_revisit_ts.asc(),
+                    Item.last_seen_ts.asc(),
+                    Item.id.asc(),
+                )
+                .limit(limit)
+            )
+
+            result = await session.execute(stmt)
+            candidates: List[RevisitCandidate] = []
+            for row in result.all():
+                item: Item = row[0]
+                provider_label = row[1]
+                candidates.append(
+                    RevisitCandidate(
+                        item_id=int(item.id),
+                        provider_key=item.provider_key,
+                        provider_label=provider_label,
+                        provider_item_id=item.provider_item_id,
+                        href=item.href,
+                        title=item.title,
+                        availability=item.availability,
+                        last_seen_ts=item.last_seen_ts,
+                        last_revisit_ts=item.last_revisit_ts,
+                    )
+                )
+            return candidates
 
     async def _ensure_provider(self, session: AsyncSession, provider_key: str, label: str) -> None:
         if provider_key in self._provider_cache:
@@ -371,6 +469,74 @@ class Database:
             existing.parts_difference = match_payload.parts_difference
             existing.manual_override = False
             existing.original_score = None
+
+    async def record_revisit_outcome(
+        self,
+        item_id: int,
+        *,
+        availability: str,
+        note: Optional[str] = None,
+        source: str = "revisit",
+        observed_ts: Optional[datetime] = None,
+    ) -> bool:
+        observed = observed_ts or _now_utc()
+        normalized_availability = availability or DEFAULT_AVAILABILITY
+
+        async with self.session_factory() as session:
+            async with session.begin():
+                item = await session.get(Item, item_id)
+                if item is None:
+                    raise ValueError("Item not found")
+
+                item.availability = normalized_availability
+                item.last_revisit_ts = observed
+
+                if normalized_availability in COMPLETED_AVAILABILITIES:
+                    if not item.completed:
+                        item.completed = True
+                        item.completed_ts = observed
+                    elif item.completed_ts is None:
+                        item.completed_ts = observed
+                else:
+                    if item.completed:
+                        item.completed = False
+                        item.completed_ts = None
+
+                payload = {
+                    "title": item.title,
+                    "direct_buy": item.direct_buy,
+                    "vb_flag": item.vb_flag,
+                    "bid_cents": item.current_bid_cents,
+                    "buyout_cents": item.current_buyout_cents,
+                    "availability": normalized_availability,
+                }
+                fp = _fingerprint_payload(payload)
+
+                last_fingerprint = await session.scalar(
+                    select(Snapshot.fingerprint)
+                    .where(Snapshot.item_id == item.id)
+                    .order_by(Snapshot.observed_ts.desc())
+                    .limit(1)
+                )
+
+                if last_fingerprint == fp:
+                    return False
+
+                snapshot = Snapshot(
+                    item_id=item.id,
+                    observed_ts=observed,
+                    bid_cents=item.current_bid_cents,
+                    buyout_cents=item.current_buyout_cents,
+                    direct_buy=item.direct_buy,
+                    vb_flag=item.vb_flag,
+                    availability=normalized_availability,
+                    source=source,
+                    note=note,
+                    title=item.title,
+                    fingerprint=fp,
+                )
+                session.add(snapshot)
+                return True
 
     async def _ensure_sets_seeded(self) -> None:
         if not SETS_CSV_PATH.exists():
@@ -467,8 +633,16 @@ class Database:
     async def _ensure_schema_updates(self) -> None:
         statements = [
             "ALTER TABLE items ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS availability VARCHAR(32) NOT NULL DEFAULT 'active'",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS completed BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS completed_ts TIMESTAMPTZ",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS first_seen_ts TIMESTAMPTZ",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS last_revisit_ts TIMESTAMPTZ",
             "ALTER TABLE item_set_matches ADD COLUMN IF NOT EXISTS manual_override BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE item_set_matches ADD COLUMN IF NOT EXISTS original_score DOUBLE PRECISION",
+            "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS availability VARCHAR(32) NOT NULL DEFAULT 'active'",
+            "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS source VARCHAR(32) NOT NULL DEFAULT 'scrape'",
+            "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS note TEXT",
         ]
         async with self.engine.begin() as conn:
             for stmt in statements:

@@ -34,6 +34,22 @@ services:
       - ./videos:/app/videos
     restart: unless-stopped
 
+  watchacha-revisit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "scripts/revisit_listings.py"]
+    container_name: watchacha-revisit
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - TZ=Europe/Berlin
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - ./artifacts:/app/artifacts:ro
+    restart: unless-stopped
+
   postgres:
     image: postgres:16
     container_name: watchacha-postgres
