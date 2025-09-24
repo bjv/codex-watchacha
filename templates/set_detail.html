@@ -26,27 +26,6 @@
     </header>
 
     <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30">
-        <div class="grid gap-4 md:grid-cols-4">
-            <div class="rounded-xl bg-slate-900/60 p-4 text-center">
-                <p class="text-xs uppercase tracking-wide text-slate-500">Listings</p>
-                <p class="mt-1 text-2xl font-semibold text-white">{{ stats.item_count }}</p>
-            </div>
-            <div class="rounded-xl bg-slate-900/60 p-4 text-center">
-                <p class="text-xs uppercase tracking-wide text-slate-500">Min / Median / Ø / Max</p>
-                <p class="mt-1 text-sm text-slate-200">{{ stats.min_price }} / {{ stats.median_price }} / {{ stats.avg_price }} / {{ stats.max_price }}</p>
-            </div>
-            <div class="rounded-xl bg-slate-900/60 p-4 text-center">
-                <p class="text-xs uppercase tracking-wide text-slate-500">Ø Match</p>
-                <p class="mt-1 text-2xl font-semibold text-white">{% if stats.avg_match_score is not none %}{{ '%.2f' % stats.avg_match_score }}{% else %}-{% endif %}</p>
-            </div>
-            <div class="rounded-xl bg-slate-900/60 p-4 text-center">
-                <p class="text-xs uppercase tracking-wide text-slate-500">Bekannte Anbieter</p>
-                <p class="mt-1 text-sm text-slate-200">{{ providers|length }}</p>
-            </div>
-        </div>
-    </section>
-
-    <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30">
         <form class="flex flex-wrap items-end gap-4" method="get">
             <label class="flex flex-col gap-2 text-sm text-slate-300">
                 Anbieter
@@ -64,60 +43,128 @@
         </form>
     </section>
 
-    <section class="space-y-6">
-        <h3 class="text-lg font-semibold text-white">Listings</h3>
-        {% if items %}
-            <div class="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-                {% for item in items %}
-                    <article class="rounded-2xl border border-white/10 bg-panel p-5 shadow-xl shadow-black/30 transition hover:border-brand/60">
-                        <div class="flex items-start justify-between gap-4">
-                            <div>
-                        <div class="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
-                                <span class="rounded-full bg-white/10 px-2 py-0.5 text-white">{{ item.provider }}</span>
-                                <span class="text-slate-500">{{ item.provider_item_id }}</span>
-                                {% set avail = item.availability %}
-                                {% if item.completed %}
-                                    <span class="rounded-full bg-rose-500/20 px-2 py-0.5 text-rose-200">Abgeschlossen</span>
-                                {% elif avail != 'active' %}
-                                    <span class="rounded-full bg-amber-500/20 px-2 py-0.5 text-amber-200">{{ item.availability_label }}</span>
-                                {% else %}
-                                    <span class="rounded-full bg-emerald-500/20 px-2 py-0.5 text-emerald-200">{{ item.availability_label }}</span>
-                                {% endif %}
-                                {% if item.last_revisit_ts %}
-                                    <span class="rounded-full bg-white/10 px-2 py-0.5 text-slate-300">Revisit {{ item.last_revisit_ts.strftime('%Y-%m-%d %H:%M') }}</span>
-                                {% endif %}
+    <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30 space-y-4">
+        <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-white">Aktuelle Angebote</h3>
+            <span class="text-xs text-slate-400">{{ active_total }} aktive Listings</span>
+        </div>
+        {% if active_groups %}
+            <div class="space-y-8">
+                {% for group in active_groups %}
+                    <div class="space-y-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <h4 class="text-base font-semibold text-white">{{ group.label }}</h4>
+                            {% if group.stats %}
+                                <div class="text-xs text-slate-400">
+                                    {{ group.stats.count }} Angebote • Ø {{ group.stats.avg_price }}{% if group.stats.vb_count %} • {{ group.stats.vb_count }}× VB{% endif %}
+                                </div>
+                            {% endif %}
                         </div>
-                                <h4 class="mt-2 text-base font-semibold text-white">
-                                    <a href="/items/{{ item.id }}" class="hover:text-brand transition">{{ item.title }}</a>
-                                </h4>
-                                <a href="{{ item.href }}" target="_blank" rel="noopener" class="mt-1 inline-flex items-center gap-1 text-xs text-slate-400 hover:text-brand">🔗 Direktlink</a>
-                            </div>
-                            <div class="text-right text-sm text-slate-300">
-                                <div class="font-semibold text-emerald-300">{{ item.best_price }}</div>
-                                <div class="text-xs text-slate-500">Gebot {{ item.current_bid or '-' }}<br>Sofort {{ item.current_buyout or '-' }}</div>
-                            </div>
+                        <div class="overflow-x-auto rounded-xl border border-white/10">
+                            <table class="min-w-full divide-y divide-white/10 text-sm">
+                                <thead class="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
+                                    <tr>
+                                        <th class="px-4 py-3 text-left">Listing</th>
+                                        <th class="px-4 py-3 text-left">Typ</th>
+                                        <th class="px-4 py-3 text-left">Preis</th>
+                                        <th class="px-4 py-3 text-left">Versand</th>
+                                        <th class="px-4 py-3 text-left">Hinweis</th>
+                                        <th class="px-4 py-3 text-left">Links</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-white/5 text-slate-200">
+                                    {% for listing in group.listings %}
+                                        <tr class="hover:bg-white/5 transition">
+                                            <td class="px-4 py-3 align-top">
+                                                <div class="font-semibold text-white">
+                                                    <a href="/items/{{ listing.id }}" class="hover:text-brand transition">{{ listing.title }}</a>
+                                                </div>
+                                                <div class="mt-1 text-xs text-slate-500 flex flex-wrap gap-2">
+                                                    <span>{{ listing.provider_item_id }}</span>
+                                                    <span>Aktualisiert {{ listing.last_seen_ts.strftime('%Y-%m-%d %H:%M') if listing.last_seen_ts else '-' }}</span>
+                                                </div>
+                                            </td>
+                                            <td class="px-4 py-3 align-top text-slate-300">{{ listing.listing_type_label }}</td>
+                                            <td class="px-4 py-3 align-top font-semibold text-emerald-300">{{ listing.display_price }}</td>
+                                            <td class="px-4 py-3 align-top text-slate-300">{{ listing.shipping }}</td>
+                                            <td class="px-4 py-3 align-top text-xs text-slate-400">
+                                                {% if listing.has_auction and listing.current_bid != '-' %}
+                                                    Gebot aktuell {{ listing.current_bid }}
+                                                {% elif listing.is_vb %}
+                                                    Verhandlungsbasis
+                                                {% elif listing.direct_buy %}
+                                                    Sofortkauf verfügbar
+                                                {% else %}
+                                                    {{ listing.availability_label }}
+                                                {% endif %}
+                                            </td>
+                                            <td class="px-4 py-3 align-top text-sm">
+                                                <div class="flex gap-2">
+                                                    <a href="{{ listing.href }}" target="_blank" rel="noopener" class="rounded-lg border border-white/20 px-3 py-1 text-xs text-slate-200 hover:border-brand/50 hover:text-brand">🔗 Angebot</a>
+                                                    <a href="/items/{{ listing.id }}" class="rounded-lg border border-white/20 px-3 py-1 text-xs text-slate-200 hover:border-brand/50 hover:text-brand">🗂 Details</a>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
                         </div>
-                        <div class="mt-4 space-y-2 text-xs text-slate-400">
-                            <div class="flex flex-wrap gap-2">
-                                <span class="rounded-full bg-brand/10 px-3 py-1 text-brand">Score {{ '%.2f' % item.set.score }}</span>
-                                {% if item.set.manual_override %}<span class="rounded-full bg-orange-500/20 px-3 py-1 text-orange-300">Manuell</span>{% endif %}
-                                {% if item.set.original_score is not none %}<span class="rounded-full bg-white/10 px-3 py-1 text-slate-300">Orig {{ '%.2f' % item.set.original_score }}</span>{% endif %}
-                                {% if item.set.matched_number %}<span class="rounded-full bg-white/10 px-3 py-1 text-slate-300">Nr</span>{% endif %}
-                                {% if item.set.parts_difference is not none %}<span class="rounded-full bg-white/10 px-3 py-1 text-slate-300">Δ Teile {{ item.set.parts_difference }}</span>{% endif %}
-                                {% if item.set.name_score is not none %}<span class="rounded-full bg-white/10 px-3 py-1 text-slate-300">Name {{ '%.2f' % item.set.name_score }}</span>{% endif %}
-                            </div>
-                            <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                                <span>seit {{ item.first_seen_ts.strftime('%Y-%m-%d %H:%M') if item.first_seen_ts else '-' }}</span>
-                                <span>{{ item.last_seen_ts.strftime('%Y-%m-%d %H:%M') if item.last_seen_ts else '-' }}</span>
-                                <span>Revisit {{ item.last_revisit_ts.strftime('%Y-%m-%d %H:%M') if item.last_revisit_ts else '-' }}</span>
-                            </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="rounded-2xl border border-dashed border-white/20 bg-slate-900/40 p-10 text-center text-slate-400">
+                Keine aktiven Angebote gefunden.
+            </div>
+        {% endif %}
+    </section>
+
+    <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30 space-y-4">
+        <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-white">Markt (verkaufte Artikel)</h3>
+            <span class="text-xs text-slate-400">{{ sales_total }} abgeschlossene Listings</span>
+        </div>
+        {% if market_stats %}
+            <div class="grid gap-4 md:grid-cols-2">
+                {% for stat in market_stats %}
+                    <article class="rounded-2xl border border-white/10 bg-slate-900/60 p-5 shadow shadow-black/40">
+                        <div class="flex items-center justify-between text-sm text-slate-200">
+                            <h4 class="font-semibold text-white">{{ stat.label }}</h4>
+                            <span>{{ stat.count }} Abschlüsse</span>
                         </div>
+                        <div class="mt-3 text-sm text-slate-200">Ø {{ stat.avg_price }} • Min {{ stat.min_price }} • Max {{ stat.max_price }}</div>
+                        <div class="mt-2 text-xs text-slate-400">{{ stat.note }}</div>
                     </article>
                 {% endfor %}
             </div>
         {% else %}
             <div class="rounded-2xl border border-dashed border-white/20 bg-slate-900/40 p-10 text-center text-slate-400">
-                Noch keine Listings, die diesem Set zugeordnet sind.
+                Keine abgeschlossenen Verkäufe erfasst.
+            </div>
+        {% endif %}
+    </section>
+
+    <section class="rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30 space-y-4">
+        <h3 class="text-lg font-semibold text-white">Vergleich aktive Angebote</h3>
+        {% if comparison_stats %}
+            <div class="grid gap-4 md:grid-cols-2">
+                {% for stat in comparison_stats %}
+                    <article class="rounded-2xl border border-white/10 bg-slate-900/60 p-5 shadow shadow-black/40">
+                        <div class="flex items-center justify-between text-sm text-slate-200">
+                            <h4 class="font-semibold text-white">{{ stat.label }}</h4>
+                            <span>{{ stat.count }} Angebote</span>
+                        </div>
+                        <div class="mt-3 text-sm text-slate-200">Ø {{ stat.avg_price }}</div>
+                        <div class="mt-2 text-xs text-slate-400">Min {{ stat.min_price }} • Median {{ stat.median_price }} • Max {{ stat.max_price }}</div>
+                        {% if stat.sparkline %}
+                            <div class="mt-3 font-mono text-lg tracking-tight text-brand">{{ stat.sparkline }}</div>
+                        {% endif %}
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="rounded-2xl border border-dashed border-white/20 bg-slate-900/40 p-10 text-center text-slate-400">
+                Keine aktiven Angebote zum Vergleich vorhanden.
             </div>
         {% endif %}
     </section>

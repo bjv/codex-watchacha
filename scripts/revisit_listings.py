@@ -36,6 +36,48 @@ CONFIG_PATH = ROOT / "config.yml"
 class RevisitOutcome:
     availability: str
     note: Optional[str]
+    settled_price_cents: Optional[int] = None
+    price_origin: Optional[str] = None
+    shipping_cents: Optional[int] = None
+    shipping_note: Optional[str] = None
+    listing_type: Optional[str] = None
+    settled_ts: Optional[datetime] = None
+
+
+PRICE_RE = re.compile(r"([\d\.\s,]+)\s*€|EUR\s*([\d\.\s,]+)", re.IGNORECASE)
+
+
+def parse_price_to_cents(text: Optional[str]) -> Optional[int]:
+    if not text:
+        return None
+    match = PRICE_RE.search(text)
+    if not match:
+        return None
+    raw = (match.group(1) or match.group(2) or "").strip().replace(".", "").replace(" ", "").replace(",", ".")
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return int(round(value * 100))
+
+
+def cents_to_eur(value: Optional[int]) -> str:
+    if value is None:
+        return "-"
+    return f"{value / 100:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def format_shipping(cents: Optional[int], note: Optional[str]) -> str:
+    if cents is None and not note:
+        return "-"
+    parts = []
+    if cents is not None:
+        parts.append("Kostenlos" if cents == 0 else cents_to_eur(cents))
+    if note:
+        clean = note.strip()
+        if clean:
+            parts.append(clean)
+    return " | ".join(parts) if parts else "-"
 
 
 def load_config() -> Dict[str, object]:
@@ -87,6 +129,7 @@ async def detect_kleinanzeigen(page: Page, url: str) -> RevisitOutcome:
         return RevisitOutcome(
             "reserved",
             f"Kleinanzeigen: sichtbarer Reserviert-Marker :: {reserved_marker}",
+            price_origin="reserved_estimate",
         )
 
     deleted_marker = await _capture_marker("gelöscht")
@@ -101,6 +144,7 @@ async def detect_kleinanzeigen(page: Page, url: str) -> RevisitOutcome:
         return RevisitOutcome(
             "sold",
             f"Kleinanzeigen: sichtbarer Verkauft-Marker :: {sold_marker}",
+            price_origin="sold_final",
         )
 
     return RevisitOutcome("active", None)
@@ -196,20 +240,23 @@ async def detect_ebay(page: Page, url: str) -> RevisitOutcome:
     price_text = price_info["text"]
 
     note_parts = []
-    if panel_html:
-        note_parts.append(f"Panel={panel_html}")
-    if signal_html:
-        note_parts.append(f"Signal={signal_html}")
     if price_text:
         note_parts.append(f"Preis={price_text}")
     note_parts.append(f"Quelle={html_source}")
     note = " | ".join(note_parts) if note_parts else None
 
+    settled_price_cents = parse_price_to_cents(price_text)
+
     if "verkauft" in panel_text and "verkauft" in signal_text:
-        return RevisitOutcome("sold", note)
+        return RevisitOutcome(
+            "sold",
+            note,
+            settled_price_cents=settled_price_cents,
+            price_origin="sold_final",
+        )
 
     if ("beendet" in panel_text or "endete" in panel_text) and "beendet" in signal_text:
-        return RevisitOutcome("unsold", note)
+        return RevisitOutcome("unsold", note, price_origin="unsold")
 
     # fallback: no explicit status change detected
     return RevisitOutcome(None, note)
@@ -244,6 +291,25 @@ async def process_candidate(
         outcome = await detector(page, candidate.href)
         availability_after = outcome.availability or availability_before
         note = outcome.note
+        settled_price = outcome.settled_price_cents
+        price_origin = outcome.price_origin or candidate.price_origin or ("sold_final" if availability_after == "sold" else candidate.price_origin)
+        listing_type = outcome.listing_type or candidate.listing_type or "unknown"
+        shipping_cents = outcome.shipping_cents if outcome.shipping_cents is not None else candidate.shipping_cents
+        shipping_note = outcome.shipping_note if outcome.shipping_note is not None else candidate.shipping_note
+        settled_ts = outcome.settled_ts
+        if settled_price is None and availability_after in COMPLETED_AVAILABILITIES:
+            settled_price = (
+                candidate.settled_price_cents
+                or candidate.current_buyout_cents
+                or candidate.current_bid_cents
+            )
+        if price_origin is None:
+            if availability_after == "reserved":
+                price_origin = "reserved_estimate"
+            elif availability_after == "unsold":
+                price_origin = "unsold"
+            else:
+                price_origin = candidate.price_origin or "live"
         snapshot_created = False
         if not dry_run:
             snapshot_created = await database.record_revisit_outcome(
@@ -251,10 +317,20 @@ async def process_candidate(
                 availability=availability_after,
                 note=note,
                 source="revisit",
+                settled_price_cents=settled_price,
+                price_origin=price_origin,
+                listing_type=listing_type,
+                shipping_cents=shipping_cents,
+                shipping_note=shipping_note,
+                settled_ts=settled_ts,
             )
         marker = "✓" if availability_after in COMPLETED_AVAILABILITIES else "·"
         change_suffix = "*" if snapshot_created else ""
         note_part = f" – {note}" if note else ""
+        if settled_price is not None:
+            note_part += f" • Preis {cents_to_eur(settled_price)}"
+        if price_origin and price_origin not in {candidate.price_origin}:
+            note_part += f" [{price_origin}]"
         prefix = "[revisit:dry]" if dry_run else f"[revisit]{change_suffix}"
         print(
             f"{prefix} {marker} {candidate.provider_key}:{candidate.provider_item_id} -> "
@@ -288,6 +364,13 @@ async def check_single_url(provider_key: str, url: str) -> int:
                 print(f"[check] Provider : {provider_key}")
                 print(f"[check] URL      : {url}")
                 print(f"[check] Status   : {availability}")
+                if outcome.price_origin:
+                    print(f"[check] Quelle   : {outcome.price_origin}")
+                if outcome.settled_price_cents is not None:
+                    print(f"[check] Preis    : {cents_to_eur(outcome.settled_price_cents)}")
+                if outcome.shipping_cents is not None or outcome.shipping_note:
+                    shipping = format_shipping(outcome.shipping_cents, outcome.shipping_note)
+                    print(f"[check] Versand  : {shipping}")
                 if note:
                     print(f"[check] Hinweis  : {note}")
                     if "::" in note:

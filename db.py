@@ -66,6 +66,12 @@ class Item(Base):
     first_seen_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_seen_ts = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_revisit_ts = Column(DateTime(timezone=True), nullable=True)
+    listing_type = Column(String(32), nullable=False, default="unknown")
+    shipping_cents = Column(Integer, nullable=True)
+    shipping_note = Column(Text, nullable=True)
+    price_origin = Column(String(32), nullable=False, default="live")
+    settled_price_cents = Column(Integer, nullable=True)
+    settled_ts = Column(DateTime(timezone=True), nullable=True)
     hidden = Column(Boolean, nullable=False, default=False)
 
     provider = relationship("Provider", back_populates="items")
@@ -87,6 +93,11 @@ class Snapshot(Base):
     buyout_cents = Column(Integer, nullable=True)
     direct_buy = Column(Boolean, nullable=False, default=False)
     vb_flag = Column(Boolean, nullable=False, default=False)
+    listing_type = Column(String(32), nullable=False, default="unknown")
+    shipping_cents = Column(Integer, nullable=True)
+    shipping_note = Column(Text, nullable=True)
+    price_origin = Column(String(32), nullable=False, default="live")
+    settled_price_cents = Column(Integer, nullable=True)
     availability = Column(String(32), nullable=False, default="active")
     source = Column(String(32), nullable=False, default="scrape")
     note = Column(Text, nullable=True)
@@ -179,6 +190,13 @@ class RevisitCandidate:
     availability: str
     last_seen_ts: datetime
     last_revisit_ts: Optional[datetime]
+    current_bid_cents: Optional[int]
+    current_buyout_cents: Optional[int]
+    listing_type: str
+    shipping_cents: Optional[int]
+    shipping_note: Optional[str]
+    price_origin: str
+    settled_price_cents: Optional[int]
 
 
 def _now_utc() -> datetime:
@@ -192,6 +210,11 @@ def _fingerprint_payload(data: Dict[str, Any]) -> str:
         "direct_buy": bool(data.get("direct_buy")),
         "vb_flag": bool(data.get("vb_flag")),
         "availability": (data.get("availability") or DEFAULT_AVAILABILITY),
+        "listing_type": (data.get("listing_type") or "unknown"),
+        "shipping_cents": data.get("shipping_cents"),
+        "shipping_note": (data.get("shipping_note") or "").strip().casefold(),
+        "price_origin": (data.get("price_origin") or "live"),
+        "settled_price": data.get("settled_price_cents"),
         "title": (data.get("title") or "").strip().casefold(),
     }
     encoded = json.dumps(fingerprint_fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -233,6 +256,17 @@ class Database:
             completed_ts = now
         snapshot_note = payload.get("snapshot_note")
         snapshot_source = payload.get("snapshot_source", "scrape")
+        listing_type = payload.get("listing_type") or "unknown"
+        shipping_cents = payload.get("shipping_cents")
+        shipping_note = payload.get("shipping_note")
+        price_origin_payload = payload.get("price_origin", "live")
+        payload.setdefault("price_origin", price_origin_payload)
+        payload.setdefault("listing_type", listing_type)
+        payload.setdefault("shipping_cents", shipping_cents)
+        payload.setdefault("shipping_note", shipping_note)
+        settled_price_cents_payload = payload.get("settled_price_cents")
+        payload.setdefault("settled_price_cents", settled_price_cents_payload)
+        settled_ts_payload = payload.get("settled_ts")
         fp = _fingerprint_payload(payload)
 
         async with self.session_factory() as session:
@@ -259,6 +293,12 @@ class Database:
                         completed_ts=completed_ts,
                         first_seen_ts=now,
                         last_seen_ts=now,
+                        listing_type=listing_type,
+                        shipping_cents=shipping_cents,
+                        shipping_note=shipping_note,
+                        price_origin=price_origin_payload,
+                        settled_price_cents=settled_price_cents_payload,
+                        settled_ts=settled_ts_payload,
                     )
                     session.add(item)
                     await session.flush([item])
@@ -271,6 +311,11 @@ class Database:
                         "current_buyout_cents": (None, item.current_buyout_cents),
                         "availability": (None, item.availability),
                         "completed": (None, item.completed),
+                        "listing_type": (None, item.listing_type),
+                        "shipping_cents": (None, item.shipping_cents),
+                        "shipping_note": (None, item.shipping_note),
+                        "price_origin": (None, item.price_origin),
+                        "settled_price_cents": (None, item.settled_price_cents),
                     }
                 else:
                     updates = {
@@ -283,11 +328,20 @@ class Database:
                         "currency": payload.get("currency", "EUR"),
                         "availability": availability,
                     }
+                    if listing_type and listing_type != item.listing_type:
+                        updates["listing_type"] = listing_type
+                    if shipping_cents is not None and shipping_cents != item.shipping_cents:
+                        updates["shipping_cents"] = shipping_cents
+                    if shipping_note is not None and (shipping_note or item.shipping_note):
+                        if shipping_note != item.shipping_note:
+                            updates["shipping_note"] = shipping_note
+                    if price_origin_payload and price_origin_payload != item.price_origin:
+                        updates["price_origin"] = price_origin_payload
                     for attr, new_val in updates.items():
                         old_val = getattr(item, attr)
                         if old_val != new_val:
                             setattr(item, attr, new_val)
-                            if attr in {"title", "direct_buy", "vb_flag", "current_bid_cents", "current_buyout_cents", "availability"}:
+                            if attr in {"title", "direct_buy", "vb_flag", "current_bid_cents", "current_buyout_cents", "availability", "listing_type", "shipping_cents", "shipping_note", "price_origin"}:
                                 changed_fields[attr] = (old_val, new_val)
 
                     if item.completed != completed_flag or (
@@ -296,6 +350,14 @@ class Database:
                         changed_fields["completed"] = (item.completed, completed_flag)
                         item.completed = completed_flag
                         item.completed_ts = completed_ts
+
+                    if settled_price_cents_payload is not None and item.settled_price_cents != settled_price_cents_payload:
+                        changed_fields["settled_price_cents"] = (
+                            item.settled_price_cents,
+                            settled_price_cents_payload,
+                        )
+                        item.settled_price_cents = settled_price_cents_payload
+                        item.settled_ts = settled_ts_payload or now
 
                     item.last_seen_ts = now
 
@@ -321,6 +383,11 @@ class Database:
                         buyout_cents=payload.get("buyout_cents"),
                         direct_buy=bool(payload.get("direct_buy")),
                         vb_flag=bool(payload.get("vb_flag")),
+                        listing_type=listing_type,
+                        shipping_cents=shipping_cents,
+                        shipping_note=shipping_note,
+                        price_origin=price_origin_payload,
+                        settled_price_cents=settled_price_cents_payload,
                         availability=availability,
                         source=snapshot_source,
                         note=snapshot_note,
@@ -403,6 +470,13 @@ class Database:
                         availability=item.availability,
                         last_seen_ts=item.last_seen_ts,
                         last_revisit_ts=item.last_revisit_ts,
+                        current_bid_cents=item.current_bid_cents,
+                        current_buyout_cents=item.current_buyout_cents,
+                        listing_type=item.listing_type,
+                        shipping_cents=item.shipping_cents,
+                        shipping_note=item.shipping_note,
+                        price_origin=item.price_origin,
+                        settled_price_cents=item.settled_price_cents,
                     )
                 )
             return candidates
@@ -478,6 +552,12 @@ class Database:
         note: Optional[str] = None,
         source: str = "revisit",
         observed_ts: Optional[datetime] = None,
+        settled_price_cents: Optional[int] = None,
+        price_origin: Optional[str] = None,
+        listing_type: Optional[str] = None,
+        shipping_cents: Optional[int] = None,
+        shipping_note: Optional[str] = None,
+        settled_ts: Optional[datetime] = None,
     ) -> bool:
         observed = observed_ts or _now_utc()
         normalized_availability = availability or DEFAULT_AVAILABILITY
@@ -490,6 +570,22 @@ class Database:
 
                 item.availability = normalized_availability
                 item.last_revisit_ts = observed
+
+                if price_origin:
+                    item.price_origin = price_origin
+
+                if listing_type and listing_type != "unknown":
+                    item.listing_type = listing_type
+
+                if shipping_cents is not None:
+                    item.shipping_cents = shipping_cents
+
+                if shipping_note is not None:
+                    item.shipping_note = shipping_note
+
+                if settled_price_cents is not None:
+                    item.settled_price_cents = settled_price_cents
+                    item.settled_ts = settled_ts or observed
 
                 if normalized_availability in COMPLETED_AVAILABILITIES:
                     if not item.completed:
@@ -509,6 +605,11 @@ class Database:
                     "bid_cents": item.current_bid_cents,
                     "buyout_cents": item.current_buyout_cents,
                     "availability": normalized_availability,
+                    "listing_type": item.listing_type,
+                    "shipping_cents": item.shipping_cents,
+                    "shipping_note": item.shipping_note,
+                    "price_origin": item.price_origin,
+                    "settled_price_cents": item.settled_price_cents,
                 }
                 fp = _fingerprint_payload(payload)
 
@@ -529,6 +630,11 @@ class Database:
                     buyout_cents=item.current_buyout_cents,
                     direct_buy=item.direct_buy,
                     vb_flag=item.vb_flag,
+                    listing_type=item.listing_type,
+                    shipping_cents=item.shipping_cents,
+                    shipping_note=item.shipping_note,
+                    price_origin=item.price_origin,
+                    settled_price_cents=item.settled_price_cents,
                     availability=normalized_availability,
                     source=source,
                     note=note,
@@ -638,11 +744,22 @@ class Database:
             "ALTER TABLE items ADD COLUMN IF NOT EXISTS completed_ts TIMESTAMPTZ",
             "ALTER TABLE items ADD COLUMN IF NOT EXISTS first_seen_ts TIMESTAMPTZ",
             "ALTER TABLE items ADD COLUMN IF NOT EXISTS last_revisit_ts TIMESTAMPTZ",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS listing_type VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS shipping_cents INTEGER",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS shipping_note TEXT",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS price_origin VARCHAR(32) NOT NULL DEFAULT 'live'",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS settled_price_cents INTEGER",
+            "ALTER TABLE items ADD COLUMN IF NOT EXISTS settled_ts TIMESTAMPTZ",
             "ALTER TABLE item_set_matches ADD COLUMN IF NOT EXISTS manual_override BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE item_set_matches ADD COLUMN IF NOT EXISTS original_score DOUBLE PRECISION",
             "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS availability VARCHAR(32) NOT NULL DEFAULT 'active'",
             "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS source VARCHAR(32) NOT NULL DEFAULT 'scrape'",
             "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS note TEXT",
+            "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS listing_type VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+            "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS shipping_cents INTEGER",
+            "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS shipping_note TEXT",
+            "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS price_origin VARCHAR(32) NOT NULL DEFAULT 'live'",
+            "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS settled_price_cents INTEGER",
         ]
         async with self.engine.begin() as conn:
             for stmt in statements:

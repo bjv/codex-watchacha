@@ -12,10 +12,13 @@
                     <span>{{ items|length }} Listings</span>
                 </div>
             </div>
-            <form class="grid gap-4 md:grid-cols-2 xl:grid-cols-4" method="get">
+            <form id="listingFilterForm" class="grid gap-4 md:grid-cols-2 xl:grid-cols-4" method="get">
                 <label class="flex flex-col gap-2 text-sm text-slate-300">
                     Suchbegriff
-                    <input type="text" name="q" value="{{ query }}" class="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white placeholder:text-slate-500 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40" placeholder="z. B. BlueBrixx Shuttle">
+                    <div class="relative">
+                        <input id="listingFilterSearchInput" type="text" name="q" value="{{ query }}" class="w-full rounded-xl border border-white/10 bg-slate-900/70 py-2 pl-3 pr-10 text-white placeholder:text-slate-500 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40" placeholder="z. B. BlueBrixx Shuttle">
+                        <button type="button" id="listingFilterSearchClear" class="search-clear-button" aria-label="Suchbegriff zurücksetzen" {% if not query %}hidden{% endif %}>x</button>
+                    </div>
                 </label>
                 <label class="flex flex-col gap-2 text-sm text-slate-300">
                     Anbieter
@@ -28,14 +31,29 @@
                 </label>
                 <label class="flex flex-col gap-2 text-sm text-slate-300">
                     Set
-                    <select name="set_nr" class="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40">
-                        <option value="">Alle</option>
-                        {% for option in set_options %}
-                            <option value="{{ option.nr }}" {% if set_filter == option.nr %}selected{% endif %}>
-                                {{ option.nr }}{% if option.name %} – {{ option.name }}{% endif %}
-                            </option>
-                        {% endfor %}
-                    </select>
+                    <div id="listingSetPickerWrapper" class="set-select-wrapper" data-enhanced="false" data-expanded="false" {% if without_set %}data-disabled="true"{% endif %}>
+                        <select name="set_nr" id="filterSetSelect" class="set-select-native w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40" {% if without_set %}disabled{% endif %}>
+                            <option value="">Alle</option>
+                            {% for option in set_options %}
+                                <option value="{{ option.nr }}" {% if set_filter == option.nr %}selected{% endif %}>
+                                    {{ option.nr }}{% if option.name %} – {{ option.name }}{% endif %}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div class="set-picker" aria-hidden="true">
+                            <button type="button" id="filterSetPickerTrigger" class="set-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+                                <span id="filterSetPickerLabel">Set auswählen</span>
+                                <span class="set-picker-caret">▾</span>
+                            </button>
+                            <div class="set-picker-popover" role="listbox" aria-labelledby="filterSetPickerTrigger" data-visible="false">
+                                <div class="set-picker-search">
+                                    <input id="filterSetFilterInput" type="text" class="set-picker-input" placeholder="Set-Nr oder Name filtern" autocomplete="off" spellcheck="false">
+                                </div>
+                                <ul id="filterSetPickerList" class="set-picker-options"></ul>
+                                <div id="filterSetPickerEmpty" class="set-picker-empty" hidden>Keine Treffer</div>
+                            </div>
+                        </div>
+                    </div>
                 </label>
                 <label class="flex flex-col gap-2 text-sm text-slate-300">
                     Limit
@@ -45,9 +63,12 @@
                     <input type="checkbox" name="show_hidden" value="1" {% if show_hidden %}checked{% endif %} class="h-4 w-4 rounded border-white/20 bg-slate-900 text-brand focus:ring-brand/60">
                     Versteckte Listings anzeigen
                 </label>
+                <label class="flex items-center gap-3 text-sm text-slate-300">
+                    <input type="checkbox" name="without_set" value="1" {% if without_set %}checked{% endif %} class="h-4 w-4 rounded border-white/20 bg-slate-900 text-brand focus:ring-brand/60">
+                    Nur Listings ohne Set-Zuordnung
+                </label>
                 <div class="flex items-center gap-2">
-                    <button type="submit" title="Filter anwenden" class="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-black shadow-lg shadow-brand/40 transition hover:bg-sky-400">🔍 Anwenden</button>
-                    <a href="/" class="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-300 transition hover:bg-white/10">❌ Reset</a>
+                    <a href="/?reset=1" class="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-300 transition hover:bg-white/10">❌ Reset</a>
                 </div>
             </form>
             <div class="flex flex-wrap items-center gap-2">
@@ -143,4 +164,529 @@
         </div>
     {% endif %}
 </div>
+<style>
+    .search-clear-button {
+        position: absolute;
+        top: 50%;
+        right: 0.7rem;
+        transform: translateY(-50%);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.5rem;
+        height: 1.5rem;
+        border: none;
+        border-radius: 9999px;
+        background: rgba(148, 163, 184, 0.18);
+        color: #cbd5f5;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+    }
+    .search-clear-button:hover,
+    .search-clear-button:focus-visible {
+        background: rgba(56, 189, 248, 0.28);
+        color: #f8fafc;
+        outline: none;
+    }
+    .set-select-wrapper {
+        position: relative;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    .set-select-wrapper[data-enhanced="false"] .set-picker {
+        display: none;
+    }
+    .set-select-wrapper[data-enhanced="true"] .set-select-native {
+        display: none;
+    }
+    .set-select-wrapper[data-disabled="true"] .set-picker-trigger {
+        opacity: 0.55;
+        cursor: not-allowed;
+        pointer-events: none;
+    }
+    .set-picker {
+        position: relative;
+    }
+    .set-picker-trigger {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        border-radius: 0.75rem;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(15, 23, 42, 0.7);
+        color: #f8fafc;
+        padding: 0.6rem 0.9rem;
+        text-align: left;
+        font-size: 0.95rem;
+        transition: border 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+    }
+    .set-picker-trigger:hover,
+    .set-picker-trigger:focus-visible,
+    .set-picker-trigger[aria-expanded="true"] {
+        border-color: rgba(56, 189, 248, 0.6);
+        box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.35);
+        color: #e0f2fe;
+        outline: none;
+    }
+    .set-picker-caret {
+        color: #38bdf8;
+        font-size: 0.85rem;
+    }
+    .set-picker-popover {
+        position: absolute;
+        top: calc(100% + 0.5rem);
+        left: 0;
+        right: 0;
+        border-radius: 0.75rem;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(15, 23, 42, 0.97);
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.6);
+        overflow: hidden;
+        display: none;
+        z-index: 40;
+    }
+    .set-select-wrapper[data-expanded="true"] .set-picker-popover {
+        display: block;
+    }
+    .set-picker-search {
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+        background: rgba(15, 23, 42, 0.92);
+    }
+    .set-picker-input {
+        width: 100%;
+        border: none;
+        border-radius: 0.6rem;
+        background: rgba(30, 41, 59, 0.7);
+        padding: 0.45rem 0.65rem;
+        color: #f8fafc;
+        font-size: 0.9rem;
+        outline: none;
+    }
+    .set-picker-input::placeholder {
+        color: rgba(148, 163, 184, 0.7);
+    }
+    .set-picker-options {
+        max-height: 240px;
+        overflow-y: auto;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    .set-picker-option {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.55rem 0.85rem;
+        cursor: pointer;
+        color: #cbd5f5;
+        transition: background 0.15s ease, color 0.15s ease;
+    }
+    .set-picker-option:hover,
+    .set-picker-option.is-active {
+        background: rgba(56, 189, 248, 0.16);
+        color: #e0f2fe;
+    }
+    .set-picker-option.is-selected::after {
+        content: "✓";
+        font-size: 0.8rem;
+        color: #38bdf8;
+    }
+    .set-picker-empty {
+        padding: 0.75rem 0.85rem;
+        font-size: 0.85rem;
+        color: rgba(148, 163, 184, 0.9);
+    }
+</style>
+<script>
+    (function() {
+        const form = document.getElementById('listingFilterForm');
+        if (!form) return;
+
+        const filterKeys = ['q', 'provider', 'set_nr', 'limit', 'show_hidden', 'without_set'];
+        const withoutSetCheckbox = form.querySelector('input[name="without_set"]');
+        const showHiddenCheckbox = form.querySelector('input[name="show_hidden"]');
+        const setSelect = form.querySelector('#filterSetSelect') || form.querySelector('select[name="set_nr"]');
+        const searchInput = form.querySelector('#listingFilterSearchInput');
+        const searchClearButton = form.querySelector('#listingFilterSearchClear');
+        let setPickerWrapper = null;
+        let setPickerTrigger = null;
+        let closeSetPicker = () => {};
+        let refreshSetLabel = () => {};
+
+        const syncSetDisabled = () => {
+            if (!setSelect) return;
+            const shouldDisable = Boolean(withoutSetCheckbox && withoutSetCheckbox.checked);
+            setSelect.disabled = shouldDisable;
+            if (setPickerTrigger) {
+                setPickerTrigger.disabled = shouldDisable;
+            }
+            if (setPickerWrapper) {
+                setPickerWrapper.setAttribute('data-disabled', shouldDisable ? 'true' : 'false');
+                if (shouldDisable) {
+                    closeSetPicker();
+                }
+            }
+        };
+
+        const navigateWithCurrentFilters = () => {
+            const url = new URL(window.location.href);
+            const params = new URLSearchParams(url.search);
+
+            // ensure temporarily enabled elements participate in FormData
+            const toggledDisabled = [];
+            if (setSelect && setSelect.disabled) {
+                setSelect.disabled = false;
+                toggledDisabled.push(setSelect);
+            }
+
+            const formData = new FormData(form);
+
+            toggledDisabled.forEach((el) => {
+                el.disabled = true;
+            });
+
+            // Remove previous filter params
+            filterKeys.forEach((key) => params.delete(key));
+            params.delete('reset');
+
+            const applyParam = (key, value) => {
+                if (value === undefined || value === null) {
+                    return;
+                }
+                if (typeof value === 'string') {
+                    const trimmed = value.trim();
+                    if (!trimmed) {
+                        if (key === 'limit') {
+                            return;
+                        }
+                        params.set(key, '');
+                        return;
+                    }
+                    params.set(key, trimmed);
+                    return;
+                }
+                if (value !== '') {
+                    params.set(key, String(value));
+                }
+            };
+
+            // Process checkboxes explicitly for clarity
+            if (showHiddenCheckbox) {
+                params.set('show_hidden', showHiddenCheckbox.checked ? '1' : '0');
+            }
+            if (withoutSetCheckbox) {
+                params.set('without_set', withoutSetCheckbox.checked ? '1' : '0');
+            }
+
+            for (const [key, rawValue] of formData.entries()) {
+                if (key === 'show_hidden' || key === 'without_set') {
+                    continue; // handled explicitly above
+                }
+                applyParam(key, rawValue);
+            }
+
+            if (withoutSetCheckbox && withoutSetCheckbox.checked) {
+                params.delete('set_nr');
+            }
+
+            const limitValue = params.get('limit');
+            if (limitValue !== null && !limitValue.trim()) {
+                params.delete('limit');
+            }
+
+            url.search = params.toString();
+            window.location.href = url.toString();
+        };
+
+        if (searchInput && searchClearButton) {
+            const updateSearchClearVisibility = () => {
+                const hasValue = Boolean(searchInput.value.trim());
+                searchClearButton.hidden = !hasValue;
+            };
+
+            searchClearButton.addEventListener('click', () => {
+                if (!searchInput.value) {
+                    return;
+                }
+                searchInput.value = '';
+                updateSearchClearVisibility();
+                navigateWithCurrentFilters();
+                searchInput.focus({ preventScroll: true });
+            });
+
+            searchInput.addEventListener('input', updateSearchClearVisibility);
+            updateSearchClearVisibility();
+        }
+
+        form.addEventListener('change', (event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
+                return;
+            }
+            if (target.type === 'checkbox' || target.tagName === 'SELECT') {
+                navigateWithCurrentFilters();
+            }
+        });
+
+        const textInputs = form.querySelectorAll('input[type="text"], input[type="number"]');
+        textInputs.forEach((input) => {
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    navigateWithCurrentFilters();
+                }
+            });
+        });
+
+        const initFilterSetPicker = () => {
+            if (!setSelect) return;
+            const wrapper = document.getElementById('listingSetPickerWrapper');
+            const trigger = document.getElementById('filterSetPickerTrigger');
+            const label = document.getElementById('filterSetPickerLabel');
+            const list = document.getElementById('filterSetPickerList');
+            const emptyState = document.getElementById('filterSetPickerEmpty');
+            const filterInput = document.getElementById('filterSetFilterInput');
+            if (!wrapper || !trigger || !label || !list || !emptyState || !filterInput) {
+                return;
+            }
+
+            const options = Array.from(setSelect.options).map((option) => ({
+                value: option.value,
+                text: option.textContent.trim(),
+                searchable: `${option.value} ${option.textContent}`.toLowerCase(),
+                selected: option.selected,
+                option,
+            }));
+
+            if (!options.length) {
+                trigger.disabled = true;
+                return;
+            }
+
+            setPickerWrapper = wrapper;
+            setPickerTrigger = trigger;
+
+            wrapper.setAttribute('data-enhanced', 'true');
+            trigger.setAttribute('aria-controls', 'filterSetPickerList');
+
+            let filteredIndices = options.map((_, idx) => idx);
+            let activeIdx = Math.max(0, options.findIndex((opt) => opt.selected));
+            if (activeIdx < 0) {
+                activeIdx = 0;
+            }
+
+            const ensureVisible = () => {
+                const active = list.querySelector('[data-active="true"]');
+                if (active) {
+                    active.scrollIntoView({ block: 'nearest' });
+                }
+            };
+
+            refreshSetLabel = () => {
+                const selected = options.find((opt) => opt.value === setSelect.value);
+                if (selected) {
+                    label.textContent = selected.text;
+                } else {
+                    label.textContent = 'Set auswählen';
+                }
+            };
+
+            const renderList = () => {
+                list.innerHTML = '';
+                if (!filteredIndices.length) {
+                    emptyState.hidden = false;
+                    activeIdx = 0;
+                    return;
+                }
+
+                emptyState.hidden = true;
+                if (activeIdx >= filteredIndices.length) {
+                    activeIdx = filteredIndices.length - 1;
+                }
+                if (activeIdx < 0) {
+                    activeIdx = 0;
+                }
+
+                filteredIndices.forEach((optionIndex, position) => {
+                    const opt = options[optionIndex];
+                    const li = document.createElement('li');
+                    li.className = 'set-picker-option';
+                    li.dataset.value = opt.value;
+                    li.textContent = opt.text;
+                    li.setAttribute('role', 'option');
+                    li.tabIndex = -1;
+                    if (opt.selected) {
+                        li.classList.add('is-selected');
+                    }
+                    if (position === activeIdx) {
+                        li.classList.add('is-active');
+                        li.dataset.active = 'true';
+                    }
+                    li.addEventListener('mousedown', (event) => event.preventDefault());
+                    li.addEventListener('click', () => {
+                        chooseValue(opt.value);
+                        closePickerInternal();
+                        trigger.focus({ preventScroll: true });
+                    });
+                    list.appendChild(li);
+                });
+
+                ensureVisible();
+            };
+
+            const applyFilter = () => {
+                const query = filterInput.value.trim().toLowerCase();
+                filteredIndices = options.reduce((acc, opt, idx) => {
+                    if (!query || opt.searchable.includes(query)) {
+                        acc.push(idx);
+                    }
+                    return acc;
+                }, []);
+
+                const selectedPosition = filteredIndices.findIndex((idx) => options[idx].value === setSelect.value);
+                activeIdx = selectedPosition !== -1 ? selectedPosition : 0;
+                renderList();
+            };
+
+            const setActiveIdx = (nextIdx) => {
+                if (!filteredIndices.length) {
+                    return;
+                }
+                activeIdx = (nextIdx + filteredIndices.length) % filteredIndices.length;
+                list.querySelectorAll('.set-picker-option').forEach((node, idx) => {
+                    const isActive = idx === activeIdx;
+                    node.classList.toggle('is-active', isActive);
+                    if (isActive) {
+                        node.dataset.active = 'true';
+                    } else {
+                        node.removeAttribute('data-active');
+                    }
+                });
+                ensureVisible();
+            };
+
+            const chooseValue = (value) => {
+                options.forEach((opt) => {
+                    const isSelected = opt.value === value;
+                    opt.selected = isSelected;
+                    opt.option.selected = isSelected;
+                });
+
+                setSelect.value = value;
+                refreshSetLabel();
+                setSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                renderList();
+            };
+
+            const openPicker = (resetQuery = false) => {
+                if (setPickerWrapper && setPickerWrapper.getAttribute('data-disabled') === 'true') {
+                    return;
+                }
+                wrapper.setAttribute('data-expanded', 'true');
+                trigger.setAttribute('aria-expanded', 'true');
+                if (resetQuery) {
+                    filterInput.value = '';
+                    applyFilter();
+                }
+                requestAnimationFrame(() => filterInput.focus({ preventScroll: true }));
+            };
+
+            const closePickerInternal = () => {
+                wrapper.setAttribute('data-expanded', 'false');
+                trigger.setAttribute('aria-expanded', 'false');
+            };
+
+            closeSetPicker = closePickerInternal;
+
+            refreshSetLabel();
+            applyFilter();
+
+            trigger.addEventListener('click', () => {
+                const expanded = wrapper.getAttribute('data-expanded') === 'true';
+                if (expanded) {
+                    closePickerInternal();
+                } else {
+                    openPicker(true);
+                }
+            });
+
+            trigger.addEventListener('keydown', (event) => {
+                if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    const expanded = wrapper.getAttribute('data-expanded') === 'true';
+                    if (!expanded) {
+                        openPicker(true);
+                    } else if (filteredIndices.length) {
+                        chooseValue(options[filteredIndices[activeIdx]].value);
+                        closePickerInternal();
+                    }
+                } else if (event.key === 'Escape') {
+                    closePickerInternal();
+                }
+            });
+
+            filterInput.addEventListener('input', applyFilter);
+            filterInput.addEventListener('keydown', (event) => {
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setActiveIdx(activeIdx + 1);
+                } else if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setActiveIdx(activeIdx - 1);
+                } else if (event.key === 'Enter') {
+                    event.preventDefault();
+                    if (filteredIndices.length) {
+                        chooseValue(options[filteredIndices[activeIdx]].value);
+                        closePickerInternal();
+                        trigger.focus({ preventScroll: true });
+                    }
+                } else if (event.key === 'Escape') {
+                    if (filterInput.value) {
+                        filterInput.value = '';
+                        applyFilter();
+                    } else {
+                        closePickerInternal();
+                        trigger.focus({ preventScroll: true });
+                    }
+                }
+            });
+
+            list.addEventListener('mousemove', (event) => {
+                const target = event.target.closest('.set-picker-option');
+                if (!target || !list.contains(target)) return;
+                const nodes = Array.from(list.querySelectorAll('.set-picker-option'));
+                const index = nodes.indexOf(target);
+                if (index !== -1 && index !== activeIdx) {
+                    setActiveIdx(index);
+                }
+            });
+
+            document.addEventListener('mousedown', (event) => {
+                if (!wrapper.contains(event.target)) {
+                    closePickerInternal();
+                }
+            });
+
+            setSelect.addEventListener('change', () => {
+                refreshSetLabel();
+                applyFilter();
+            });
+        };
+
+        initFilterSetPicker();
+        syncSetDisabled();
+        if (withoutSetCheckbox) {
+            withoutSetCheckbox.addEventListener('change', () => {
+                syncSetDisabled();
+            });
+        }
+    })();
+</script>
 {% endblock %}

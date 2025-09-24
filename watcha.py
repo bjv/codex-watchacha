@@ -39,6 +39,33 @@ def parse_eur(text: str) -> Tuple[Optional[int], str]:
     return cents, f"{quantized:.2f} €"
 
 
+def parse_shipping_info(text: Optional[str]) -> Tuple[Optional[int], str]:
+    if not text:
+        return None, ""
+    cleaned = text.replace("\xa0", " ").strip()
+    if not cleaned:
+        return None, ""
+    lower = cleaned.lower()
+    if any(keyword in lower for keyword in ("kostenlos", "gratis", "frei")):
+        return 0, cleaned
+    cents, _display = parse_eur(cleaned)
+    return cents, cleaned
+
+
+def determine_listing_type(direct_buy: bool, vb_flag: bool, has_bid: bool) -> str:
+    if has_bid and direct_buy:
+        return "combo"
+    if has_bid:
+        return "auction"
+    if direct_buy and vb_flag:
+        return "fixed_vb"
+    if direct_buy:
+        return "fixed"
+    if vb_flag:
+        return "vb"
+    return "unknown"
+
+
 TRANSLATION_TABLE = str.maketrans({
     "ä": "ae",
     "ö": "oe",
@@ -94,7 +121,7 @@ class SetMatcher:
                 scorer=fuzz.token_set_ratio,
                 limit=5,
             )
-            for set_nr, score, _ in name_matches:
+            for _matched_name, score, set_nr in name_matches:
                 if score >= 50:
                     candidate_nrs.add(set_nr)
 
@@ -273,7 +300,7 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
     else:
         return []
 
-    out = []
+    out: List[Dict[str, Any]] = []
     for a in links:
         href = (await a.get_attribute("href")) or ""
         m = ITEM_ID_EBAY_RE.search(href)
@@ -281,10 +308,7 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
             continue
         item_id = m.group("id")
         title = (await a.text_content()) or ""
-        # Karte
         li = await a.evaluate_handle("el => el.closest('li') || el.parentElement")
-        bid_price = ""
-        buy_price = ""
 
         bid_price = ""
         bid_cents: Optional[int] = None
@@ -292,9 +316,10 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
         buy_cents: Optional[int] = None
         item_vb_flag = False
         item_direct_buy = False
+        shipping_text = ""
+        shipping_cents: Optional[int] = None
 
         if li:
-            # Primär: neues Kartenlayout (dein Beispiel mit "su-card...")
             rows = await li.query_selector_all(
                 ".su-card-container__attributes__primary .s-card__attribute-row"
             )
@@ -305,12 +330,15 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
                     txt = ((await row.text_content()) or "").strip()
                     low = txt.lower()
 
-                    # Lieferkosten ignorieren
-                    if low.startswith("+eur") or "lieferung" in low:
+                    if low.startswith("+eur") or "lieferung" in low or "versand" in low:
+                        if not shipping_text:
+                            sc, sd = parse_shipping_info(txt)
+                            shipping_text = sd
+                            if sc is not None:
+                                shipping_cents = sc
                         i += 1
                         continue
 
-                    # Preiszeile?
                     has_price_span = await row.query_selector(".s-card__price") is not None
                     is_price_like = ("eur" in low) or ("€" in txt)
                     if has_price_span or is_price_like:
@@ -324,11 +352,15 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
                             nxt_txt = ((await rows[j].text_content()) or "").strip()
                             l2 = nxt_txt.lower()
 
-                            if l2.startswith("+eur") or "lieferung" in l2:
+                            if l2.startswith("+eur") or "lieferung" in l2 or "versand" in l2:
+                                if not shipping_text:
+                                    sc, sd = parse_shipping_info(nxt_txt)
+                                    shipping_text = sd
+                                    if sc is not None:
+                                        shipping_cents = sc
                                 j += 1
                                 continue
 
-                            # Nächster Preis? -> stop Labelsammeln
                             has_next_price = await rows[j].query_selector(".s-card__price") is not None
                             is_next_price_like = ("eur" in l2) or ("€" in nxt_txt)
                             if has_next_price or is_next_price_like:
@@ -360,7 +392,6 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
                                     buy_cents = cents
                                     item_direct_buy = True
                             else:
-                                # kein explizites Label -> Festpreis
                                 if not buy_price:
                                     buy_price = display_value
                                     buy_cents = cents
@@ -371,38 +402,60 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
 
                     i += 1
 
-            # Fallback: ältere/andere Layouts
             if not bid_price and not buy_price:
-                for psel in [
+                for selector in [
                     ".s-item__price",
                     ".x-price-primary span",
                     ".s-item__detail--primary span.s-item__price",
                     "span[aria-label*='€']",
                 ]:
                     try:
-                        el = await li.query_selector(psel)
-                        if el:
-                            main_txt = (await el.text_content()) or ""
-                            cents, normalized = parse_eur(main_txt)
-                            if normalized:
-                                li_text_full = ((await li.text_content()) or "").lower()
-                                display_value = normalized
-                                if any(token in li_text_full for token in ("preisvorschlag", "best offer", "vb")):
-                                    item_vb_flag = True
-                                    display_value = f"{display_value} (VB)"
-                                if "gebot" in li_text_full or "bids" in li_text_full:
-                                    bid_price = display_value
-                                    bid_cents = cents
-                                else:
-                                    buy_price = display_value
-                                    buy_cents = cents
-                                    item_direct_buy = True
-                                break
+                        el = await li.query_selector(selector)
                     except Exception:
-                        pass
+                        el = None
+                    if el:
+                        main_txt = (await el.text_content()) or ""
+                        cents, normalized = parse_eur(main_txt)
+                        if not normalized:
+                            continue
+                        li_text_full = ((await li.text_content()) or "").lower()
+                        display_value = normalized
+                        if any(token in li_text_full for token in ("preisvorschlag", "best offer", "vb")):
+                            item_vb_flag = True
+                            display_value = f"{display_value} (VB)"
+                        if "gebot" in li_text_full or "bids" in li_text_full:
+                            bid_price = display_value
+                            bid_cents = cents
+                        else:
+                            buy_price = display_value
+                            buy_cents = cents
+                            item_direct_buy = True
+                        break
+
+            if not shipping_text and li:
+                try:
+                    ship_el = await li.query_selector(
+                        ".s-item__shipping, .x-shipping-cost, .s-card__shipping, .s-item__logisticsCost"
+                    )
+                except Exception:
+                    ship_el = None
+                if ship_el:
+                    shipping_raw = ((await ship_el.text_content()) or "").replace(" ", " ").strip()
+                    sc, sd = parse_shipping_info(shipping_raw)
+                    shipping_text = sd
+                    if sc is not None:
+                        shipping_cents = sc
 
         if buy_price:
             item_direct_buy = True
+
+        listing_type = determine_listing_type(item_direct_buy, item_vb_flag, bid_cents is not None)
+
+        if shipping_text:
+            sc, sd = parse_shipping_info(shipping_text)
+            if sc is not None:
+                shipping_cents = sc
+            shipping_text = sd
 
         out.append({
             "id": item_id,
@@ -415,6 +468,11 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
             "direct_buy": item_direct_buy,
             "vb_flag": item_vb_flag,
             "currency": "EUR",
+            "shipping_note": shipping_text,
+            "shipping_cents": shipping_cents,
+            "listing_type": listing_type,
+            "price_origin": "live",
+            "settled_price_cents": None,
         })
     return out
 
@@ -438,7 +496,8 @@ async def ka_parse_results(page) -> List[Dict[str, Any]]:
         return []
 
     cards = await page.query_selector_all("article.aditem")
-    out, seen_ids = [], set()
+    out: List[Dict[str, Any]] = []
+    seen_ids = set()
 
     for card in cards:
         ad_id = await card.get_attribute("data-adid")
@@ -457,18 +516,25 @@ async def ka_parse_results(page) -> List[Dict[str, Any]]:
         title_el = await card.query_selector("h2 a")
         title = ((await title_el.text_content()) or "").strip() if title_el else ""
 
-        # Preis + VB
         price_el = await card.query_selector(".aditem-main--middle--price-shipping--price")
-        price_txt = ((await price_el.text_content()) or "").replace("\xa0", " ").strip() if price_el else ""
+        price_txt = ((await price_el.text_content()) or "").replace(" ", " ").strip() if price_el else ""
         vb_flag = ("vb" in price_txt.lower()) or ("preisvorschlag" in price_txt.lower())
         price_cents, price_display = parse_eur(price_txt)
         if price_display and vb_flag and "(VB)" not in price_display:
             price_display = f"{price_display} (VB)"
 
-        # Direkt kaufen?
+        shipping_el = await card.query_selector(".aditem-main--middle--price-shipping--shipping")
+        shipping_raw = ((await shipping_el.text_content()) or "").replace(" ", " ").strip() if shipping_el else ""
+        shipping_cents, shipping_text = parse_shipping_info(shipping_raw)
+        if not shipping_text:
+            body_text = ((await card.text_content()) or "")
+            if "Nur Abholung" in body_text:
+                shipping_text = "Nur Abholung"
+            elif "Versand möglich" in body_text:
+                shipping_text = "Versand möglich"
+
         direct_buy = False
         try:
-            # robust: spezifischer Tag ODER Volltextsuche im Card-Text
             tag = await card.query_selector(".simpletag:has-text('Direkt kaufen'), span:has-text('Direkt kaufen')")
             if tag:
                 direct_buy = True
@@ -484,12 +550,14 @@ async def ka_parse_results(page) -> List[Dict[str, Any]]:
         buy_price = ""
         buy_cents = None
         if price_display:
-            if direct_buy:
+            if direct_buy or not vb_flag:
                 buy_price = price_display
                 buy_cents = price_cents
             else:
                 bid_price = price_display
                 bid_cents = price_cents
+
+        listing_type = determine_listing_type(direct_buy, vb_flag, bid_cents is not None)
 
         out.append({
             "id": ad_id,
@@ -502,6 +570,11 @@ async def ka_parse_results(page) -> List[Dict[str, Any]]:
             "direct_buy": direct_buy,
             "vb_flag": vb_flag,
             "currency": "EUR",
+            "shipping_note": shipping_text,
+            "shipping_cents": shipping_cents,
+            "listing_type": listing_type,
+            "price_origin": "live",
+            "settled_price_cents": None,
         })
 
     return out

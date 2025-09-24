@@ -4,6 +4,10 @@
 
 {% block content %}
 <div class="space-y-10">
+    <div id="setSuggestionToast" class="set-suggestion-toast" hidden>
+        <span id="setSuggestionToastText"></span>
+        <button type="button" id="setSuggestionToastClose" aria-label="Hinweis schließen">×</button>
+    </div>
     <a href="/" class="inline-flex items-center gap-2 text-sm text-slate-300 transition hover:text-brand">← Zurück zu den Listings</a>
 
     <section id="setWrapper" data-expanded="{{ 'false' if item.set else 'true' }}" class="relative set-wrapper">
@@ -63,13 +67,33 @@
                         {% endif %}
                     </form>
                 </div>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <button type="button" id="suggestSetButton" data-item-id="{{ item.id }}" class="inline-flex items-center gap-2 rounded-xl border border-brand/40 bg-brand/10 px-3 py-1.5 text-xs font-semibold text-brand transition hover:bg-brand/20">
+                        ✨ Set-Vorschlag
+                    </button>
+                </div>
                 <form method="post" action="/items/{{ item.id }}/assign_set" class="mt-4 flex flex-col gap-2 text-sm text-slate-300">
-                    <label class="text-xs uppercase tracking-wide text-slate-500">Set auswählen</label>
-                    <select name="set_nr" class="min-w-[220px] rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40" required>
+                    <label class="text-xs uppercase tracking-wide text-slate-500" for="setPickerTrigger">Set auswählen</label>
+                    <div class="set-select-wrapper" data-enhanced="false" data-expanded="false">
+                        <select name="set_nr" id="setSelect" class="set-select-native min-w-[220px] rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40" required>
                         {% for option in set_options %}
                             <option value="{{ option.nr }}" {% if item.set and item.set.nr == option.nr %}selected{% endif %}>{{ option.nr }}{% if option.name %} – {{ option.name }}{% endif %}</option>
                         {% endfor %}
-                    </select>
+                        </select>
+                        <div class="set-picker" aria-hidden="true">
+                            <button type="button" id="setPickerTrigger" class="set-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+                                <span id="setPickerLabel">Set wählen</span>
+                                <span class="set-picker-caret">▾</span>
+                            </button>
+                            <div class="set-picker-popover" role="listbox" aria-labelledby="setPickerTrigger" data-visible="false">
+                                <div class="set-picker-search">
+                                    <input id="setFilter" type="text" class="set-picker-input" placeholder="Set-Nr oder Name filtern" autocomplete="off" spellcheck="false">
+                                </div>
+                                <ul id="setPickerList" class="set-picker-options"></ul>
+                                <div class="set-picker-empty" hidden>Keine Treffer</div>
+                            </div>
+                        </div>
+                    </div>
                     <button type="submit" class="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-black shadow shadow-brand/40 transition hover:bg-sky-400">Set manuell zuordnen</button>
                 </form>
                 {% if item.set %}
@@ -104,9 +128,6 @@
                                         <span class="rounded-full bg-orange-500/20 px-2 py-0.5 text-xs text-orange-300">Δ {{ change.label }}</span>
                                     {% endfor %}
                                 </div>
-                            {% endif %}
-                            {% if snap.note %}
-                                <div class="mt-2 text-xs text-slate-400">{{ snap.note }}</div>
                             {% endif %}
                         </a>
                     </li>
@@ -191,6 +212,144 @@
         align-items: stretch;
         gap: 12px;
     }
+    .set-select-wrapper {
+        position: relative;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    .set-select-wrapper[data-enhanced="false"] .set-picker {
+        display: none;
+    }
+    .set-select-wrapper[data-enhanced="true"] .set-select-native {
+        display: none;
+    }
+    .set-picker {
+        position: relative;
+    }
+    .set-picker-trigger {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        border-radius: 0.75rem;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(15, 23, 42, 0.7);
+        color: #f8fafc;
+        padding: 0.6rem 0.9rem;
+        text-align: left;
+        font-size: 0.95rem;
+        transition: border 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+    }
+    .set-picker-trigger:hover,
+    .set-picker-trigger:focus-visible,
+    .set-picker-trigger[aria-expanded="true"] {
+        border-color: rgba(56, 189, 248, 0.6);
+        box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.35);
+        color: #e0f2fe;
+    }
+    .set-picker-caret {
+        color: #38bdf8;
+        font-size: 0.85rem;
+    }
+    .set-picker-popover {
+        position: absolute;
+        top: calc(100% + 0.5rem);
+        left: 0;
+        right: 0;
+        border-radius: 0.75rem;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(15, 23, 42, 0.97);
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.6);
+        overflow: hidden;
+        display: none;
+        z-index: 40;
+    }
+    .set-select-wrapper[data-expanded="true"] .set-picker-popover {
+        display: block;
+    }
+    .set-picker-search {
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+        background: rgba(15, 23, 42, 0.92);
+    }
+    .set-picker-input {
+        width: 100%;
+        border: none;
+        border-radius: 0.6rem;
+        background: rgba(30, 41, 59, 0.7);
+        padding: 0.45rem 0.65rem;
+        color: #f8fafc;
+        font-size: 0.9rem;
+        outline: none;
+    }
+    .set-picker-input::placeholder {
+        color: rgba(148, 163, 184, 0.7);
+    }
+    .set-picker-options {
+        max-height: 260px;
+        overflow-y: auto;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    .set-picker-option {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.55rem 0.85rem;
+        cursor: pointer;
+        color: #cbd5f5;
+        transition: background 0.15s ease, color 0.15s ease;
+    }
+    .set-picker-option:hover,
+    .set-picker-option.is-active {
+        background: rgba(56, 189, 248, 0.16);
+        color: #e0f2fe;
+    }
+    .set-picker-option.is-selected::after {
+        content: "✓";
+        font-size: 0.8rem;
+        color: #38bdf8;
+    }
+    .set-picker-empty {
+        padding: 0.75rem 0.85rem;
+        font-size: 0.85rem;
+        color: rgba(148, 163, 184, 0.9);
+    }
+    .set-suggestion-toast[hidden] {
+        display: none;
+    }
+    .set-suggestion-toast {
+        position: fixed;
+        top: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem 1.1rem;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        color: #e0f2fe;
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.35);
+        z-index: 120;
+        font-size: 0.9rem;
+    }
+.set-suggestion-toast button {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
     .set-toggle {
         display: flex;
         align-items: center;
@@ -231,6 +390,339 @@
         toggle.addEventListener('click', () => {
             const expanded = wrapper.getAttribute('data-expanded') === 'true';
             wrapper.setAttribute('data-expanded', expanded ? 'false' : 'true');
+        });
+    })();
+
+    (function() {
+        const wrapper = document.querySelector('.set-select-wrapper');
+        if (!wrapper) return;
+
+        const select = wrapper.querySelector('#setSelect');
+        const picker = wrapper.querySelector('.set-picker');
+        const trigger = wrapper.querySelector('#setPickerTrigger');
+        const label = wrapper.querySelector('#setPickerLabel');
+        const list = wrapper.querySelector('#setPickerList');
+        const emptyState = wrapper.querySelector('.set-picker-empty');
+        const filterInput = wrapper.querySelector('#setFilter');
+
+        if (!select || !picker || !trigger || !label || !list || !emptyState || !filterInput) {
+            return;
+        }
+
+        const mapped = Array.from(select.options).map((option) => ({
+            value: option.value,
+            label: option.textContent.trim(),
+            searchable: `${option.value} ${option.textContent}`.toLowerCase(),
+            selected: option.selected,
+            option,
+        }));
+
+        if (!mapped.length) {
+            trigger.disabled = true;
+            return;
+        }
+
+        wrapper.setAttribute('data-enhanced', 'true');
+        picker.setAttribute('aria-hidden', 'false');
+        trigger.setAttribute('aria-controls', 'setPickerList');
+
+        let filteredIndices = mapped.map((_, idx) => idx);
+        let activeIdx = Math.max(0, mapped.findIndex((opt) => opt.selected));
+        if (Number.isNaN(activeIdx) || activeIdx < 0) {
+            activeIdx = 0;
+        }
+
+        const syncLabel = () => {
+            const currentValue = select.value;
+            let selected = null;
+            mapped.forEach((opt) => {
+                const isSelected = opt.value === currentValue;
+                opt.selected = isSelected;
+                opt.option.selected = isSelected;
+                if (isSelected) {
+                    selected = opt;
+                }
+            });
+            label.textContent = selected ? selected.label : 'Set wählen';
+        };
+
+        const ensureVisible = () => {
+            const active = list.querySelector('[data-active="true"]');
+            if (active) {
+                active.scrollIntoView({ block: 'nearest' });
+            }
+        };
+
+        const renderList = () => {
+            list.innerHTML = '';
+
+            const total = filteredIndices.length;
+            if (!total) {
+                emptyState.hidden = false;
+                activeIdx = 0;
+                return;
+            }
+
+            emptyState.hidden = true;
+            if (activeIdx >= total) {
+                activeIdx = total - 1;
+            }
+            if (activeIdx < 0) {
+                activeIdx = 0;
+            }
+
+            filteredIndices.forEach((mappedIndex, position) => {
+                const opt = mapped[mappedIndex];
+                const li = document.createElement('li');
+                li.className = 'set-picker-option';
+                li.textContent = opt.label;
+                li.dataset.value = opt.value;
+                li.setAttribute('role', 'option');
+                li.tabIndex = -1;
+                if (opt.selected) {
+                    li.classList.add('is-selected');
+                }
+                if (position === activeIdx) {
+                    li.classList.add('is-active');
+                    li.dataset.active = 'true';
+                }
+                li.addEventListener('mousedown', (event) => event.preventDefault());
+                li.addEventListener('click', () => {
+                    chooseValue(opt.value);
+                    closePicker();
+                    trigger.focus({ preventScroll: true });
+                });
+                list.appendChild(li);
+            });
+
+            ensureVisible();
+        };
+
+        const applyFilter = () => {
+            const query = filterInput.value.trim().toLowerCase();
+            filteredIndices = mapped.reduce((acc, opt, idx) => {
+                if (!query || opt.searchable.includes(query)) {
+                    acc.push(idx);
+                }
+                return acc;
+            }, []);
+
+            const selectedPosition = filteredIndices.findIndex((idx) => mapped[idx].selected);
+            activeIdx = selectedPosition !== -1 ? selectedPosition : 0;
+
+            renderList();
+        };
+
+        const setActiveIdx = (nextIdx) => {
+            if (!filteredIndices.length) {
+                activeIdx = 0;
+                list.querySelectorAll('.set-picker-option').forEach((node) => {
+                    node.classList.remove('is-active');
+                    node.removeAttribute('data-active');
+                });
+                return;
+            }
+            activeIdx = (nextIdx + filteredIndices.length) % filteredIndices.length;
+            list.querySelectorAll('.set-picker-option').forEach((node, idx) => {
+                const isActive = idx === activeIdx;
+                node.classList.toggle('is-active', isActive);
+                if (isActive) {
+                    node.dataset.active = 'true';
+                } else {
+                    node.removeAttribute('data-active');
+                }
+            });
+            ensureVisible();
+        };
+
+        const chooseValue = (value) => {
+            const target = mapped.find((opt) => opt.value === value);
+            if (!target) return;
+
+            mapped.forEach((opt) => {
+                const isSelected = opt.value === value;
+                opt.selected = isSelected;
+                opt.option.selected = isSelected;
+            });
+
+            select.value = value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+
+        const openPicker = (resetQuery = false) => {
+            wrapper.setAttribute('data-expanded', 'true');
+            trigger.setAttribute('aria-expanded', 'true');
+            if (resetQuery) {
+                filterInput.value = '';
+                applyFilter();
+            }
+            requestAnimationFrame(() => filterInput.focus({ preventScroll: true }));
+        };
+
+        const closePicker = () => {
+            wrapper.setAttribute('data-expanded', 'false');
+            trigger.setAttribute('aria-expanded', 'false');
+        };
+
+        syncLabel();
+        applyFilter();
+
+        trigger.addEventListener('click', () => {
+            const expanded = wrapper.getAttribute('data-expanded') === 'true';
+            if (expanded) {
+                closePicker();
+            } else {
+                openPicker(true);
+            }
+        });
+
+        trigger.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                const expanded = wrapper.getAttribute('data-expanded') === 'true';
+                if (!expanded) {
+                    openPicker(true);
+                } else if (filteredIndices.length) {
+                    chooseValue(mapped[filteredIndices[activeIdx]].value);
+                    closePicker();
+                }
+            } else if (event.key === 'Escape') {
+                closePicker();
+            }
+        });
+
+        filterInput.addEventListener('input', applyFilter);
+        filterInput.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setActiveIdx(activeIdx + 1);
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setActiveIdx(activeIdx - 1);
+            } else if (event.key === 'Enter') {
+                event.preventDefault();
+                if (filteredIndices.length) {
+                    chooseValue(mapped[filteredIndices[activeIdx]].value);
+                    closePicker();
+                    trigger.focus({ preventScroll: true });
+                }
+            } else if (event.key === 'Escape') {
+                if (filterInput.value) {
+                    filterInput.value = '';
+                    applyFilter();
+                } else {
+                    closePicker();
+                    trigger.focus({ preventScroll: true });
+                }
+            }
+        });
+
+        list.addEventListener('mousemove', (event) => {
+            const target = event.target.closest('.set-picker-option');
+            if (!target || !list.contains(target)) return;
+            const nodes = Array.from(list.querySelectorAll('.set-picker-option'));
+            const idx = nodes.indexOf(target);
+            if (idx !== -1 && idx !== activeIdx) {
+                setActiveIdx(idx);
+            }
+        });
+
+        document.addEventListener('mousedown', (event) => {
+            if (!wrapper.contains(event.target)) {
+                closePicker();
+            }
+        });
+
+        wrapper.addEventListener('focusout', (event) => {
+            const next = event.relatedTarget;
+            if (!next || !wrapper.contains(next)) {
+                setTimeout(() => {
+                    const hasFocus = wrapper.contains(document.activeElement);
+                    if (!hasFocus) {
+                        closePicker();
+                    }
+                }, 0);
+            }
+        });
+
+        select.addEventListener('change', () => {
+            syncLabel();
+            applyFilter();
+        });
+    })();
+
+    (function() {
+        const button = document.getElementById('suggestSetButton');
+        const select = document.getElementById('setSelect');
+        const toast = document.getElementById('setSuggestionToast');
+        const toastText = document.getElementById('setSuggestionToastText');
+        const toastClose = document.getElementById('setSuggestionToastClose');
+        if (!button || !select || !toast || !toastText || !toastClose) {
+            return;
+        }
+
+        let hideTimeout = null;
+
+        const showToast = (message) => {
+            toastText.textContent = message;
+            toast.hidden = false;
+            if (hideTimeout) {
+                clearTimeout(hideTimeout);
+            }
+            hideTimeout = setTimeout(() => {
+                toast.hidden = true;
+            }, 6000);
+        };
+
+        toastClose.addEventListener('click', () => {
+            if (hideTimeout) {
+                clearTimeout(hideTimeout);
+                hideTimeout = null;
+            }
+            toast.hidden = true;
+        });
+
+        button.addEventListener('click', async () => {
+            const itemId = button.dataset.itemId;
+            if (!itemId) {
+                showToast('Keine Item-ID gefunden.');
+                return;
+            }
+            button.disabled = true;
+            button.classList.add('opacity-70');
+            try {
+                const response = await fetch(`/items/${itemId}/suggest_set`, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                    },
+                });
+                if (!response.ok) {
+                    throw new Error(`Serverfehler ${response.status}`);
+                }
+                const payload = await response.json();
+                if (payload.status === 'no_match') {
+                    showToast('Kein Treffer gefunden.');
+                    return;
+                }
+                const match = payload.match;
+                if (!match || !match.set_nr) {
+                    showToast('Ungültige Antwort erhalten.');
+                    return;
+                }
+                const scorePercent = Math.round(match.score * 100);
+                showToast(`Vorschlag: Set ${match.set_nr}${match.name ? ' – ' + match.name : ''} (≈ ${scorePercent}% Übereinstimmung)`);
+                const optionExists = Array.from(select.options).some((opt) => opt.value === match.set_nr);
+                if (optionExists) {
+                    select.value = match.set_nr;
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            } catch (error) {
+                showToast(`Fehler bei der Suche: ${error instanceof Error ? error.message : 'unbekannt'}`);
+            } finally {
+                button.disabled = false;
+                button.classList.remove('opacity-70');
+            }
         });
     })();
 </script>
