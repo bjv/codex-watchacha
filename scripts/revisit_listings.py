@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Revisit stale listings to detect availability changes."""
 
+import asyncio
+import traceback
 import argparse
 import asyncio
 import sys
@@ -46,6 +48,16 @@ class RevisitOutcome:
 
 PRICE_RE = re.compile(r"([\d\.\s,]+)\s*€|EUR\s*([\d\.\s,]+)", re.IGNORECASE)
 
+async def process_candidate_with_timeout(*args, **kwargs):
+    candidate = args[2]  # browser, database, candidate, ...
+    try:
+        print(f"[revisit] Starte Kandidat {candidate.provider_key}:{candidate.provider_item_id}")
+        await asyncio.wait_for(process_candidate(*args, **kwargs), timeout=30)
+    except asyncio.TimeoutError:
+        print(f"[revisit:timeout] Kandidat {candidate.provider_key}:{candidate.provider_item_id} hat Timeout erreicht!")
+    except Exception:
+        print(f"[revisit:error] Exception in process_candidate für {candidate.provider_key}:{candidate.provider_item_id}:")
+        traceback.print_exc()
 
 def parse_price_to_cents(text: Optional[str]) -> Optional[int]:
     if not text:
@@ -407,17 +419,26 @@ async def run_once(
     navigation_timeout = int(revisit_cfg.get("navigation_timeout_ms", 20000) or 20000)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=stale_days)
-    candidates = await database.fetch_revisit_candidates(
-        providers=providers,
-        stale_before=cutoff,
-        limit=batch_size,
-    )
+    print(f"[revisit] Starte neuen Durchlauf um {datetime.now().isoformat()}")
+    try:
+        candidates = await asyncio.wait_for(
+            database.fetch_revisit_candidates(
+                providers=providers,
+                stale_before=cutoff,
+                limit=batch_size,
+            ),
+            timeout=navigation_timeout / 1000 + 10,
+        )
+    except asyncio.TimeoutError:
+        print("[revisit:timeout] Datenbankabfrage hat Timeout erreicht!")
+        return
+    print(f"[revisit] {len(candidates)} Kandidaten geladen")
     if not candidates:
         print("[revisit] keine veralteten Listings gefunden")
         return
 
     for candidate in candidates:
-        await process_candidate(
+        await process_candidate_with_timeout(
             browser,
             database,
             candidate,

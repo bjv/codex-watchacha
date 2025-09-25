@@ -105,6 +105,7 @@ SNAPSHOT_SOURCE_LABELS = {
 DEFAULT_LISTING_FILTERS = {
     "q": "",
     "provider": "",
+    "availability": "",
     "set_nr": "",
     "show_hidden": False,
     "without_set": False,
@@ -338,6 +339,7 @@ def _apply_item_filters(
     *,
     query: Optional[str],
     provider: Optional[str],
+    availability: Optional[str],
     set_nr: Optional[str],
     include_hidden: bool,
     only_unassigned: bool,
@@ -357,6 +359,11 @@ def _apply_item_filters(
         stmt = stmt.where(or_(*filters))
     if provider:
         stmt = stmt.where(Item.provider_key == provider)
+    if availability:
+        if availability == DEFAULT_AVAILABILITY:
+            stmt = stmt.where(or_(Item.availability == availability, Item.availability.is_(None)))
+        else:
+            stmt = stmt.where(Item.availability == availability)
     if only_unassigned:
         stmt = stmt.where(ItemSetMatch.item_id.is_(None))
     elif set_nr:
@@ -579,6 +586,7 @@ async def index(
     request: Request,
     q: Optional[str] = Query(default=None, description="Suche im Titel"),
     provider: Optional[str] = Query(default=None),
+    availability: Optional[str] = Query(default=None),
     set_nr: Optional[str] = Query(default=None),
     sort_by: Optional[str] = Query(default=None),
     sort_dir: Optional[str] = Query(default=None),
@@ -614,6 +622,14 @@ async def index(
     elif "provider" in cookie_filters:
         filters["provider"] = _coerce_str(cookie_filters.get("provider"))
 
+    if availability is not None:
+        filters["availability"] = _coerce_str(availability)
+    elif "availability" in cookie_filters:
+        filters["availability"] = _coerce_str(cookie_filters.get("availability"))
+
+    if filters["availability"] and filters["availability"] not in AVAILABILITY_LABELS:
+        filters["availability"] = ""
+
     if set_nr is not None:
         filters["set_nr"] = _coerce_str(set_nr)
     elif "set_nr" in cookie_filters:
@@ -641,6 +657,7 @@ async def index(
         _base_items_query(),
         query=filters["q"] or None,
         provider=filters["provider"] or None,
+        availability=filters["availability"] or None,
         set_nr=filters["set_nr"] or None,
         include_hidden=filters["show_hidden"],
         only_unassigned=filters["without_set"],
@@ -652,6 +669,11 @@ async def index(
     items = [_serialize_item(row) for row in result.all()]
 
     providers = await _fetch_providers(session)
+
+    availability_options = [
+        {"value": key, "label": label}
+        for key, label in AVAILABILITY_LABELS.items()
+    ]
 
     set_stmt = (
         select(Set.set_nr, Set.name)
@@ -675,6 +697,8 @@ async def index(
         "query": filters["q"],
         "providers": providers,
         "provider_filter": filters["provider"],
+        "availability_options": availability_options,
+        "availability_filter": filters["availability"],
         "set_options": set_options,
         "set_filter": set_filter_value,
         "limit": filters["limit"],
@@ -689,6 +713,7 @@ async def index(
     cookie_payload = {
         "q": filters["q"],
         "provider": filters["provider"],
+        "availability": filters["availability"],
         "set_nr": filters["set_nr"],
         "show_hidden": filters["show_hidden"],
         "without_set": filters["without_set"],

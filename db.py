@@ -438,7 +438,10 @@ class Database:
             stmt = (
                 select(Item, Provider.label.label("provider_label"))
                 .join(Provider, Provider.key == Item.provider_key)
-                .where(Item.last_seen_ts <= stale_before, Item.completed.is_(False))
+                .where(
+                    func.coalesce(Item.last_revisit_ts, Item.last_seen_ts) <= stale_before,
+                    Item.completed.is_(False),
+                )
             )
             if providers:
                 stmt = stmt.where(Item.provider_key.in_(providers))
