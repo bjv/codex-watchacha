@@ -18,7 +18,7 @@ ITEM_ID_KA_RE   = re.compile(r"/s-anzeige/.*?/(\d+)")
 PRICE_RE        = re.compile(r"([\d\.\s,]+)\s*€|EUR\s*([\d\.\s,]+)")
 SET_NR_RE       = re.compile(r"\b\d{5,6}\b")
 PARTS_RE        = re.compile(r"(\d{2,4})\s*(teile|piece|pieces|pcs|stk|stück)", re.IGNORECASE)
-REQUEST_FAIL_IGNORES = ("liberty-metrics", "frontend-metrics", "googlesyndication", "organic-ad-tracking")
+REQUEST_FAIL_IGNORES = ("liberty-metrics", "frontend-metrics", "googlesyndication", "organic-ad-tracking","googletagmanager","9S5VSJJQL24zcSOuuJ")
 
 ULTRA_PRIORITY_TAGS = {"ultra", "ultra-power-prio"}
 
@@ -264,6 +264,8 @@ def build_notification_payload(
     provider_label: str,
     search_name: str,
     item: Dict[str, Any],
+    *,
+    is_ultra: bool = False,
 ) -> Tuple[str, str]:
     match: Optional[SetMatchPayload] = item.get("set_match_info")
 
@@ -285,6 +287,9 @@ def build_notification_payload(
         title_plain = f"[{provider_label}] {search_name}"
         set_text = "-"
         probability_value = "–"
+
+    if is_ultra:
+        title_plain = "🚨⚠️‼️ULTRA‼️⚠️🚨 --- " + title_plain
 
     title = html.escape(title_plain, quote=False)
 
@@ -315,7 +320,7 @@ def build_notification_payload(
 
     return title, "\n".join(lines)
 
-async def navigate_with_fallback(page, url: str):
+async def navigate_with_fallback(page, url: str, *, log_prefix: str = ""):
     attempts = [
 #        ("networkidle", 10_000),
 #        ("domcontentloaded", 25_000),
@@ -323,12 +328,13 @@ async def navigate_with_fallback(page, url: str):
     ]
     last_err = None
     for wait_until, timeout in attempts:
-        print(f"trying: {wait_until}: {url}")
+        prefix = f"{log_prefix}" if log_prefix else ""
+        print(f"{prefix}trying: {wait_until}: {url}")
         try:
             await page.goto(url, wait_until=wait_until, timeout=timeout)
             return
         except PWTimeout as exc:
-            print(f"[warn] goto timeout for {wait_until}: {url}")
+            print(f"{prefix}[warn] goto timeout for {wait_until}: {url}")
             last_err = exc
     if last_err:
         raise last_err
@@ -682,10 +688,12 @@ async def scrape_provider(
     provider_key: str,
     terms: List[str],
     exclude_terms: Optional[List[str]] = None,
+    *,
+    log_prefix: str = "",
 ) -> Tuple[str, List[Dict[str, Any]]]:
     p = PROVIDERS[provider_key]
     url = p["build_url"](terms)
-    await navigate_with_fallback(page, url)
+    await navigate_with_fallback(page, url, log_prefix=log_prefix)
     items = await p["parse"](page)
     # Terms-Filter: jeder Begriff muss im Titel vorkommen
     filtered = []
@@ -709,11 +717,16 @@ async def execute_search(
     search_cfg: Dict[str, Any],
     *,
     reported_keys: Optional[set] = None,
+    log_prefix: str = "",
 ) -> None:
     name = search_identifier(search_cfg)
+    prefix_base = f"{log_prefix}{name}".strip()
+    prefix = f"{time.strftime('%H:%M:%S')} {prefix_base}" if prefix_base else time.strftime("%H:%M:%S")
+    tags = {str(tag).lower() for tag in search_cfg.get("tags", [])}
+    is_ultra = bool(tags & ULTRA_PRIORITY_TAGS)
     terms = search_cfg.get("terms") or []
     if not terms:
-        print(f"[skip] search '{name}' ohne terms")
+        print(f"{prefix}: [skip] ohne terms")
         return
 
     exclude_terms = search_cfg.get("exclude_terms", [])
@@ -721,13 +734,19 @@ async def execute_search(
 
     for provider_key in providers:
         if provider_key not in PROVIDERS:
-            print(f"[skip] unknown provider: {provider_key}")
+            print(f"{prefix}: [skip] unknown provider: {provider_key}")
             continue
 
         try:
-            url, items = await scrape_provider(page, provider_key, terms, exclude_terms)
+            url, items = await scrape_provider(
+                page,
+                provider_key,
+                terms,
+                exclude_terms,
+                log_prefix=f"{prefix}: " if prefix else "",
+            )
         except PWTimeout:
-            print(f"[warn] navigation failed, skipping {provider_key}:{terms}")
+            print(f"{prefix}: [warn] navigation failed, skipping {provider_key}:{terms}")
             continue
 
         new_items: List[Dict[str, Any]] = []
@@ -764,21 +783,26 @@ async def execute_search(
                 if db_result.is_new_item:
                     new_items.append(it)
             except Exception as exc:
-                print(f"[db] upsert failed for {provider_key}:{it.get('id')}: {exc}")
+                print(f"{prefix}: [db] upsert failed for {provider_key}:{it.get('id')}: {exc}")
 
         if new_items:
             for it in new_items:
                 provider_label = PROVIDERS[provider_key]["label"]
-                title, msg = build_notification_payload(provider_label, name, it)
+                title, msg = build_notification_payload(
+                    provider_label,
+                    name,
+                    it,
+                    is_ultra=is_ultra,
+                )
                 gk = make_round_key(provider_key, it)
                 if reported_keys is not None and gk in reported_keys:
-                    print(f"[skip-round] already reported this round: {gk}")
+                    print(f"{prefix}: [skip-round] already reported this round: {gk}")
                     continue
                 await notify(cfg, title, msg, it["href"])
                 if reported_keys is not None:
                     reported_keys.add(gk)
 
-        print(f"{time.strftime('%H:%M:%S')} {name} [{provider_key}]: {len(new_items)} neu, {len(items)} gesamt")
+        print(f"{prefix} [{provider_key}]: {len(new_items)} neu, {len(items)} gesamt")
 
 
 async def run_once(
@@ -809,6 +833,7 @@ async def run_once(
                 set_matcher,
                 search_cfg,
                 reported_keys=reported_this_round,
+                log_prefix="[main] ",
             )
     finally:
         await context.close()
@@ -851,6 +876,8 @@ async def priority_search_loop(
                 continue
 
             cfg_snapshot = shared_state.cfg or {}
+            search_name = search_identifier(search_cfg)
+            log_prefix = f"[prio:{search_name}] "
             try:
                 await execute_search(
                     page,
@@ -859,9 +886,10 @@ async def priority_search_loop(
                     matcher,
                     search_cfg,
                     reported_keys=None,
+                    log_prefix=log_prefix,
                 )
             except Exception as exc:
-                print(f"[prio:{search_identifier(search_cfg)}] error: {exc}")
+                print(f"{log_prefix}error: {exc}")
 
             interval_value = search_cfg.get("interval_seconds") or cfg_snapshot.get("interval_seconds", 60)
             try:
