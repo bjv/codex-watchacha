@@ -1,4 +1,4 @@
-import asyncio, re, sys, time, urllib.parse
+import asyncio, html, re, sys, time, urllib.parse
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Callable, Optional
@@ -19,6 +19,8 @@ PRICE_RE        = re.compile(r"([\d\.\s,]+)\s*€|EUR\s*([\d\.\s,]+)")
 SET_NR_RE       = re.compile(r"\b\d{5,6}\b")
 PARTS_RE        = re.compile(r"(\d{2,4})\s*(teile|piece|pieces|pcs|stk|stück)", re.IGNORECASE)
 REQUEST_FAIL_IGNORES = ("liberty-metrics", "frontend-metrics", "googlesyndication", "organic-ad-tracking")
+
+ULTRA_PRIORITY_TAGS = {"ultra", "ultra-power-prio"}
 
 
 def parse_eur(text: str) -> Tuple[Optional[int], str]:
@@ -126,7 +128,7 @@ class SetMatcher:
                     candidate_nrs.add(set_nr)
 
         best_score = 0.0
-        best_info: Optional[Tuple[str, float, bool, float, Optional[int]]] = None
+        best_info: Optional[Tuple[SetRecord, float, bool, float, Optional[int]]] = None
 
         for set_nr in candidate_nrs:
             record = self.records_by_nr.get(set_nr)
@@ -154,15 +156,16 @@ class SetMatcher:
 
             if score > best_score:
                 best_score = score
-                best_info = (set_nr, score, matched_number, name_score, parts_difference)
+                best_info = (record, score, matched_number, name_score, parts_difference)
 
         if not best_info:
             return None
 
-        set_nr, score, matched_number, name_score, parts_difference = best_info
+        record, score, matched_number, name_score, parts_difference = best_info
 
         return SetMatchPayload(
-            set_nr=set_nr,
+            set_nr=record.set_nr,
+            set_name=record.name,
             score=score,
             matched_number=matched_number,
             name_score=name_score,
@@ -175,7 +178,8 @@ def format_set_line(match: Optional[SetMatchPayload]) -> str:
     if not match:
         return "-"
     status = "" if match.above_threshold else "?"
-    fragments = [f"{match.set_nr}{status} ({match.score:.2f})"]
+    probability = f"{match.score * 100:.1f}%"
+    fragments = [f"{match.set_name} [{match.set_nr}{status}] {probability}"]
     details = []
     if match.matched_number:
         details.append("Nr")
@@ -202,6 +206,10 @@ def make_round_key(provider_key: str, it: Dict[str, str]) -> str:
     return f"{provider_key}:{it.get('id') or it.get('href')}"
 
 
+def search_identifier(search_cfg: Dict[str, Any]) -> str:
+    return search_cfg.get("name") or query_key(search_cfg.get("terms", []))
+
+
 async def notify_telegram(cfg: dict, title: str, msg: str, link: str):
     tg = cfg.get("telegram") or {}
     if not tg or not tg.get("enabled"):
@@ -212,11 +220,7 @@ async def notify_telegram(cfg: dict, title: str, msg: str, link: str):
         print("[tg] missing bot_token or chat_id")
         return
 
-    text = (
-        f"<b>{title}</b>\n"
-        f"{msg}\n\n"
-        f'<a href="{link}">👉 Zum Angebot</a>'
-    )
+    text = f"<b>{title}</b>\n\n{msg}"
 
     api = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
@@ -255,6 +259,62 @@ async def notify(cfg: dict, title: str, msg: str, link: str):
     #await notify_ntfy(cfg, title, msg, link)
     await notify_telegram(cfg, title, msg, link)
 
+
+def build_notification_payload(
+    provider_label: str,
+    search_name: str,
+    item: Dict[str, Any],
+) -> Tuple[str, str]:
+    match: Optional[SetMatchPayload] = item.get("set_match_info")
+
+    def esc(value: str) -> str:
+        return html.escape(value, quote=False)
+
+    listing_title = item.get("title") or ""
+    bid_display = item.get("bid") or "-"
+    buyout_display = item.get("buyout") or "-"
+    shipping_note = item.get("shipping_note") or ""
+    listing_type = item.get("listing_type") or "unknown"
+
+    if match:
+        set_headline = f"{match.set_name} ({match.set_nr} - {match.score * 100:.1f}%)"
+        title_plain = f"[{provider_label}] {set_headline}"
+        set_text = format_set_line(match)
+        probability_value = f"{match.score * 100:.1f}%"
+    else:
+        title_plain = f"[{provider_label}] {search_name}"
+        set_text = "-"
+        probability_value = "–"
+
+    title = html.escape(title_plain, quote=False)
+
+    lines = [
+        f"Suche: {esc(search_name)}",
+#        f"Set: {esc(set_text)}",
+#        f"Wahrscheinlichkeit: {esc(probability_value)}",
+        f"Inserat-Titel: {esc(listing_title)}",
+        f"Typ: {esc(listing_type)}",
+        f"Gebot: {esc(bid_display)}",
+        f"Sofort: {esc(buyout_display)}",
+    ]
+
+    if shipping_note:
+        lines.append(f"Versand: {esc(shipping_note)}")
+
+    listing_id_raw = str(item.get("id") or "").strip()
+    listing_href = item.get("href") or ""
+    if listing_id_raw and listing_href:
+        id_line = (
+            f'ID: 👉 <a href="{html.escape(listing_href, quote=True)}">{html.escape(listing_id_raw)}</a>'
+        )
+    elif listing_id_raw:
+        id_line = f"ID: {esc(listing_id_raw)}"
+    else:
+        id_line = "ID: –"
+    lines.append(id_line)
+
+    return title, "\n".join(lines)
+
 async def navigate_with_fallback(page, url: str):
     attempts = [
 #        ("networkidle", 10_000),
@@ -272,6 +332,22 @@ async def navigate_with_fallback(page, url: str):
             last_err = exc
     if last_err:
         raise last_err
+
+
+async def create_browser_context(browser, cfg: Dict[str, Any]):
+    record_video_dir = (
+        "videos"
+        if not bool(cfg.get("headless", True)) and bool(cfg.get("record_video", False))
+        else None
+    )
+    return await browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        locale="de-DE",
+        record_video_dir=record_video_dir,
+    )
 
 # =========================
 # Provider: eBay
@@ -625,15 +701,97 @@ async def scrape_provider(
 # =========================
 # Run Loop
 # =========================
-async def run_once(browser, cfg, database: Database, set_matcher: SetMatcher):
-    context = await browser.new_context(
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ),
-        locale="de-DE",
-        record_video_dir="videos" if not bool(cfg.get("headless", True)) and bool(cfg.get("record_video", False)) else None,
-    )
+async def execute_search(
+    page,
+    cfg: Dict[str, Any],
+    database: Database,
+    set_matcher: SetMatcher,
+    search_cfg: Dict[str, Any],
+    *,
+    reported_keys: Optional[set] = None,
+) -> None:
+    name = search_identifier(search_cfg)
+    terms = search_cfg.get("terms") or []
+    if not terms:
+        print(f"[skip] search '{name}' ohne terms")
+        return
+
+    exclude_terms = search_cfg.get("exclude_terms", [])
+    providers = search_cfg.get("providers", ["ebay"])
+
+    for provider_key in providers:
+        if provider_key not in PROVIDERS:
+            print(f"[skip] unknown provider: {provider_key}")
+            continue
+
+        try:
+            url, items = await scrape_provider(page, provider_key, terms, exclude_terms)
+        except PWTimeout:
+            print(f"[warn] navigation failed, skipping {provider_key}:{terms}")
+            continue
+
+        new_items: List[Dict[str, Any]] = []
+        for it in items:
+            if not it.get("id"):
+                continue
+            match_payload = set_matcher.match(it.get("title", ""))
+            if match_payload:
+                it["set_match_info"] = match_payload
+            payload = {
+                "provider_item_id": str(it.get("id")),
+                "title": it.get("title", ""),
+                "href": it.get("href", ""),
+                "direct_buy": bool(it.get("direct_buy")),
+                "vb_flag": bool(it.get("vb_flag")),
+                "bid_cents": it.get("bid_cents"),
+                "buyout_cents": it.get("buyout_cents"),
+                "currency": it.get("currency", "EUR"),
+                "availability": "active",
+                "listing_type": it.get("listing_type"),
+                "shipping_cents": it.get("shipping_cents"),
+                "shipping_note": it.get("shipping_note"),
+                "price_origin": it.get("price_origin"),
+                "settled_price_cents": it.get("settled_price_cents"),
+                "set_match": match_payload if match_payload and match_payload.above_threshold else None,
+            }
+            try:
+                db_result = await database.upsert_item_and_snapshot(
+                    provider_key,
+                    PROVIDERS[provider_key]["label"],
+                    payload,
+                )
+                it["_db_result"] = db_result
+                if db_result.is_new_item:
+                    new_items.append(it)
+            except Exception as exc:
+                print(f"[db] upsert failed for {provider_key}:{it.get('id')}: {exc}")
+
+        if new_items:
+            for it in new_items:
+                provider_label = PROVIDERS[provider_key]["label"]
+                title, msg = build_notification_payload(provider_label, name, it)
+                gk = make_round_key(provider_key, it)
+                if reported_keys is not None and gk in reported_keys:
+                    print(f"[skip-round] already reported this round: {gk}")
+                    continue
+                await notify(cfg, title, msg, it["href"])
+                if reported_keys is not None:
+                    reported_keys.add(gk)
+
+        print(f"{time.strftime('%H:%M:%S')} {name} [{provider_key}]: {len(new_items)} neu, {len(items)} gesamt")
+
+
+async def run_once(
+    browser,
+    cfg: Dict[str, Any],
+    database: Database,
+    set_matcher: SetMatcher,
+    searches: List[Dict[str, Any]],
+):
+    if not searches:
+        return
+
+    context = await create_browser_context(browser, cfg)
     page = await context.new_page()
     page.on("pageerror", lambda e: print(f"[pageerror] {e}"))
     page.on("requestfailed", handle_request_failed)
@@ -643,74 +801,79 @@ async def run_once(browser, cfg, database: Database, set_matcher: SetMatcher):
     reported_this_round = set()
 
     try:
-        for s in cfg.get("searches", []):
-            name = s.get("name") or query_key(s["terms"])
-            terms = s["terms"]
-            exclude_terms = s.get("exclude_terms", [])
-            providers = s.get("providers", ["ebay"])  # default eBay
-
-            for provider_key in providers:
-                if provider_key not in PROVIDERS:
-                    print(f"[skip] unknown provider: {provider_key}")
-                    continue
-
-                try:
-                    url, items = await scrape_provider(page, provider_key, terms, exclude_terms)
-                except PWTimeout:
-                    print(f"[warn] navigation failed, skipping {provider_key}:{terms}")
-                    continue
-
-                new_items: List[Dict[str, Any]] = []
-                for it in items:
-                    if not it.get("id"):
-                        continue
-                    match_payload = set_matcher.match(it.get("title", ""))
-                    if match_payload:
-                        it["set_match_info"] = match_payload
-                    payload = {
-                        "provider_item_id": str(it.get("id")),
-                        "title": it.get("title", ""),
-                        "href": it.get("href", ""),
-                        "direct_buy": bool(it.get("direct_buy")),
-                        "vb_flag": bool(it.get("vb_flag")),
-                        "bid_cents": it.get("bid_cents"),
-                        "buyout_cents": it.get("buyout_cents"),
-                        "currency": it.get("currency", "EUR"),
-                        "availability": "active",
-                        "set_match": match_payload if match_payload and match_payload.above_threshold else None,
-                    }
-                    try:
-                        db_result = await database.upsert_item_and_snapshot(
-                            provider_key,
-                            PROVIDERS[provider_key]["label"],
-                            payload,
-                        )
-                        it["_db_result"] = db_result
-                        if db_result.is_new_item:
-                            new_items.append(it)
-                    except Exception as exc:
-                        print(f"[db] upsert failed for {provider_key}:{it.get('id')}: {exc}")
-                if new_items:
-                    for it in new_items:
-                        prov_label = PROVIDERS[provider_key]["label"]
-                        title = f"[{prov_label}] {name}"
-                        msg = (
-                            f"{it['title']}\n"
-                            f"Gebot: {it.get('bid') or '-'}\n"
-                            f"Sofort: {it.get('buyout') or '-'}\n"
-                            f"Set: {format_set_line(it.get('set_match_info'))}\n"
-                            f"ID: {it['id']}"
-                        )
-                        gk = make_round_key(provider_key, it)
-                        if gk in reported_this_round:
-                            print(f"[skip-round] already reported this round: {gk}")
-                            continue
-                        await notify(cfg, title, msg, it["href"])
-                        reported_this_round.add(gk)
-
-                print(f"{time.strftime('%H:%M:%S')} {name} [{provider_key}]: {len(new_items)} neu, {len(items)} gesamt")
+        for search_cfg in searches:
+            await execute_search(
+                page,
+                cfg,
+                database,
+                set_matcher,
+                search_cfg,
+                reported_keys=reported_this_round,
+            )
     finally:
         await context.close()
+
+
+class SharedState:
+    def __init__(self) -> None:
+        self.cfg: Dict[str, Any] = {}
+        self.set_matcher: Optional[SetMatcher] = None
+        self.priority_searches: Dict[str, Dict[str, Any]] = {}
+
+
+async def priority_search_loop(
+    search_key: str,
+    shared_state: "SharedState",
+    browser,
+    database: Database,
+):
+    context = None
+    page = None
+    try:
+        while True:
+            search_cfg = shared_state.priority_searches.get(search_key)
+            if search_cfg is None:
+                await asyncio.sleep(1)
+                if shared_state.priority_searches.get(search_key) is None:
+                    break
+                continue
+
+            if context is None:
+                context = await create_browser_context(browser, shared_state.cfg)
+                page = await context.new_page()
+                page.on("pageerror", lambda e: print(f"[pageerror] {e}"))
+                page.on("requestfailed", handle_request_failed)
+                page.on("response", lambda r: r.status >= 400 and print(f"[resp {r.status}] {r.url}"))
+
+            matcher = shared_state.set_matcher
+            if matcher is None:
+                await asyncio.sleep(1)
+                continue
+
+            cfg_snapshot = shared_state.cfg or {}
+            try:
+                await execute_search(
+                    page,
+                    cfg_snapshot,
+                    database,
+                    matcher,
+                    search_cfg,
+                    reported_keys=None,
+                )
+            except Exception as exc:
+                print(f"[prio:{search_identifier(search_cfg)}] error: {exc}")
+
+            interval_value = search_cfg.get("interval_seconds") or cfg_snapshot.get("interval_seconds", 60)
+            try:
+                interval_seconds = int(interval_value)
+            except (TypeError, ValueError):
+                interval_seconds = 60
+            await asyncio.sleep(max(1, interval_seconds))
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if context is not None:
+            await context.close()
 
 async def main():
     CONFIG_PATH = Path("config.yml")
@@ -724,6 +887,9 @@ async def main():
     database = Database(db_url, echo=bool(db_cfg.get("echo", False)))
     await database.init_models()
 
+    shared_state = SharedState()
+    shared_state.cfg = cfg
+
     try:
         async with async_playwright() as p:
             # initiale Config nur für Browser-Start (headless/devtools)
@@ -736,6 +902,7 @@ async def main():
                 devtools=not headless,
             )
             try:
+                priority_tasks: Dict[str, asyncio.Task] = {}
                 while True:
                     # Config NEU laden (für searches, ntfy_topic, interval_seconds, etc.)
                     try:
@@ -747,13 +914,61 @@ async def main():
                     except Exception as e:
                         print(f"[warn] config reload failed: {e} (verwende letzte gültige)")
 
+                    shared_state.cfg = cfg
+
                     set_records = await database.fetch_set_records()
                     matcher = SetMatcher(set_records)
-                    await run_once(browser, cfg, database, matcher)
+                    shared_state.set_matcher = matcher
+
+                    searches = cfg.get("searches", []) or []
+                    priority_map: Dict[str, Dict[str, Any]] = {}
+                    normal_searches: List[Dict[str, Any]] = []
+
+                    for search_cfg in searches:
+                        tags = {str(tag).lower() for tag in search_cfg.get("tags", [])}
+                        if tags & ULTRA_PRIORITY_TAGS:
+                            key = search_identifier(search_cfg)
+                            priority_map[key] = {**search_cfg}
+                        else:
+                            normal_searches.append(search_cfg)
+
+                    shared_state.priority_searches = priority_map
+
+                    # Cancel priority loops no longer configured
+                    cancelled_tasks: List[asyncio.Task] = []
+                    for key in list(priority_tasks.keys()):
+                        if key not in priority_map:
+                            task = priority_tasks.pop(key)
+                            task.cancel()
+                            cancelled_tasks.append(task)
+                    if cancelled_tasks:
+                        await asyncio.gather(*cancelled_tasks, return_exceptions=True)
+
+                    # Clean up finished tasks and optionally restart
+                    for key, task in list(priority_tasks.items()):
+                        if task.done():
+                            if not task.cancelled():
+                                exc = task.exception()
+                                if exc:
+                                    print(f"[prio:{key}] task ended with error: {exc}")
+                            priority_tasks.pop(key, None)
+
+                    # Start new priority loops
+                    for key in priority_map.keys():
+                        if key not in priority_tasks:
+                            priority_tasks[key] = asyncio.create_task(
+                                priority_search_loop(key, shared_state, browser, database)
+                            )
+
+                    await run_once(browser, cfg, database, matcher, normal_searches)
 
                     interval = int(cfg.get("interval_seconds", 60))
-                    await asyncio.sleep(interval)
+                    await asyncio.sleep(max(1, interval))
             finally:
+                for task in priority_tasks.values():
+                    task.cancel()
+                if priority_tasks:
+                    await asyncio.gather(*priority_tasks.values(), return_exceptions=True)
                 await browser.close()
     finally:
         await database.dispose()

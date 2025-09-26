@@ -18,14 +18,14 @@ SetNr;Name;UVP_EUR;Erscheinungsdatum;Teile;Kategorie;Ära;Serie_Film;Besonderhei
 104184;U.S.S. Enterprise NCC-1701-D (groß);199.95;2022-01;1971;Raumschiff (groß);TNG;Star Trek: The Next Generation;~55 cm, Ständer
 104559;Romulanischer Warbird (D’deridex, Mini);15.95;2022-08;266;Raumschiff (Mini);TNG;Star Trek: The Next Generation;
 104561;U.S.S. Reliant NCC-1864 (Mini);11.95;2022-08;137;Raumschiff (Mini);Filme;Star Trek II: The Wrath of Khan;
-104562;U.S.S. Enterprise NCC-1701-A (Mini);7.95;2022-08;106;Raumschiff (Mini);Filme;Star Trek V: The Final Frontier;
+104562;U.S.S. Enterprise NCC-1701-A (Mini);7.95;2022-08;106;Raumschiff (Mini);Filme/TOS;Star Trek V: The Final Frontier;
 104565;Klingonischer Schlachtkreuzer K’t’inga (Mini);15.95;2022-08;259;Raumschiff (Mini);Filme;Star Trek: The Motion Picture;
 104566;Erdraumdock (Spacedock One) (Mini);9.95;2022-08;124;Station (Mini);Filme;Star Trek III: The Search for Spock;
 104567;U.S.S. Defiant NX-74205 (Mini);15.95;2022-08;238;Raumschiff (Mini);DS9;Star Trek: Deep Space Nine;
 104571;Klingonischer Schlachtkreuzer D7 (mittel);34.95;2022-07;580;Raumschiff (mittel);TOS;Star Trek: The Original Series;
 104572;U.S.S. Voyager NCC-74656 (mittel);34.95;2022-07;599;Raumschiff (mittel);VOY;Star Trek: Voyager;
 104573;Romulanischer Warbird D’deridex (mittel);29.95;2022-07;510;Raumschiff (mittel);TNG;Star Trek: The Next Generation;
-104580;Phasergewehr Typ 3 (First Contact);169.95;2022-06;2273;Requisite (1:1);TNG/Filme;Star Trek: First Contact;Länge ~816 mm
+104580;Phasergewehr Typ 3 (First Contact);169.95;2022-06;2273;Requisite (1:1);Filme/TNG;Star Trek: First Contact;Länge ~816 mm
 104583;Raumstation Deep Space Nine (groß);199.95;2022-07;2889;Station (groß);DS9;Star Trek: Deep Space Nine;Ø ~65 cm
 104584;Klingonischer Bird-of-Prey (groß);99.95;2022-06;1539;Raumschiff (groß);Filme;Star Trek III: The Search for Spock;Flügel verstellbar
 104585;Danube-Klasse Runabout 'Rio Grande' (Minifig);199.95;2022-07;3090;Raumschiff (Minifig);DS9;Star Trek: Deep Space Nine;großes Shuttle
@@ -53,7 +53,7 @@ SetNr;Name;UVP_EUR;Erscheinungsdatum;Teile;Kategorie;Ära;Serie_Film;Besonderhei
 105441;Jem’Hadar-Angriffsschiff (Mini);15.95;2023-01;251;Raumschiff (Mini);DS9;Star Trek: Deep Space Nine;
 105442;Maquis-Raider 'Val Jean' (Mini);14.95;2023-01;206;Raumschiff (Mini);VOY;Star Trek: Voyager;
 105443;U.S.S. Enterprise NCC-1701-C (Mini);12.95;2023-01;163;Raumschiff (Mini);TNG;Star Trek: The Next Generation;
-105444;U.S.S. Farragut NCC-60597 (Mini);15.95;2023-01;224;Raumschiff (Mini);Filme;Star Trek: Generations;
+105444;U.S.S. Farragut NCC-60597 (Mini);15.95;2023-01;224;Raumschiff (Mini);Filme/TNG-Ära;Star Trek: Generations;
 105445;U.S.S. Enterprise NCC-1701-E (Mini);14.95;2023-01;207;Raumschiff (Mini);Filme;Star Trek: First Contact;
 105446;Ferengi-Marauder (D’Kora-Klasse) (Mini);14.95;2023-01;207;Raumschiff (Mini);TNG;Star Trek: The Next Generation;
 105447;BrickFig: Jean-Luc Picard;13.95;2023-08;190;BrickFig;TNG;Star Trek: The Next Generation;
@@ -81,3 +81,17 @@ SetNr;Name;UVP_EUR;Erscheinungsdatum;Teile;Kategorie;Ära;Serie_Film;Besonderhei
 105707;BrickFig: James T. Kirk;13.95;2023-12;204;BrickFig;TOS;Star Trek: The Original Series;
 106907;Adventskalender (24 Star-Trek-Modelle);29.95;2023-10;852;Adventskalender;Diverse;Diverse Serien/Filme;24 Minisets
 107070;Class-F Shuttlecraft 'Galileo' (Minifig, Neuauflage);37.95;2024-03-03;767;Raumschiff (Minifig);TOS;Star Trek: The Original Series;Reissue/renumbered
+107247;Tricorder 2260s;49.95;2024-09;984;Requisite (1:1);TOS;Star Trek: The Original Series;"Gadget im Originalmaßstab; Aufklappbar"
+107724;Minifigure Pack: DS9 Crew;—;2024-08;186;Minifiguren-Set;DS9;Star Trek: Deep Space Nine;8 Figuren + Captain’s Chair Display
+107725;Minifigure Pack: ENT Crew;—;2024-08;145;Minifiguren-Set;ENT;Star Trek: Enterprise;7 Figuren + Captain’s Chair Display
+107726;Minifigure Pack: TNG Crew;—;2024-08;164;Minifiguren-Set;TNG;Star Trek: The Next Generation;7 Figuren + Captain’s Chair Display
+107727;Minifigure Pack: TOS Crew;—;2024-08;152;Minifiguren-Set;TOS;Star Trek: The Original Series;7 Figuren + Captain’s Chair Display
+107728;Minifigure Pack: VOY Crew;—;2024-08;194;Minifiguren-Set;VOY;Star Trek: Voyager;9 Figuren + Captain’s Chair Display
+107933;Minifigure Pack: Star Trek III – The Search for Spock;—;2024-08;120;Minifiguren-Set;Filme;Star Trek III: The Search for Spock;4 Figuren (Kirk, Kruge, Torg, Maltz) + Display
+108327;Bundle – U.S.S. Enterprise NCC-1701 (mit TOS Crew-Minifigs);109.95;2024-08-16;3363;Bundle (Modell+Minifigs);TOS;Star Trek: The Original Series;Enthält 104183 + 107727
+108328;Bundle – U.S.S. Enterprise NCC-1701-D (mit TNG Crew-Minifigs);99.95;2024-08-16;2135;Bundle (Modell+Minifigs);TNG;Star Trek: The Next Generation;Enthält 104184 + 107726
+108329;Bundle – Raumstation Deep Space Nine (mit DS9 Crew-Minifigs);99.95;2024-08-16;3075;Bundle (Modell+Minifigs);DS9;Star Trek: Deep Space Nine;Enthält 104583 + 107724
+108330;Bundle – Klingonischer Bird-of-Prey (mit STIII-Minifigs);49.95;2024-08-16;1659;Bundle (Modell+Minifigs);Filme;Star Trek III: The Search for Spock;Enthält 104584 + 107933
+108331;Bundle – U.S.S. Defiant NX-74205 (mit DS9 Crew-Minifigs);153.97;2024-08-16;3042;Bundle (Modell+Minifigs);DS9;Star Trek: Deep Space Nine;Enthält 104965 + 107724
+108332;Bundle – U.S.S. Voyager NCC-74656 (mit VOY Crew-Minifigs);189.95;2024-08-16;2637;Bundle (Modell+Minifigs);VOY;Star Trek: Voyager;Enthält 104966 + 107728
+108333;Bundle – Enterprise NX-01 (mit ENT Crew-Minifigs);129.95;2024-08-16;1990;Bundle (Modell+Minifigs);ENT;Star Trek: Enterprise;Enthält 105437 + 107725

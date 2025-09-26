@@ -159,6 +159,7 @@ class UpsertResult:
 @dataclass(slots=True)
 class SetMatchPayload:
     set_nr: str
+    set_name: str
     score: float
     matched_number: bool
     name_score: float
@@ -234,7 +235,7 @@ class Database:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         await self._ensure_schema_updates()
-        await self._ensure_sets_seeded()
+        await self._sync_sets_from_csv()
 
     async def dispose(self) -> None:
         await self.engine.dispose()
@@ -647,49 +648,73 @@ class Database:
                 session.add(snapshot)
                 return True
 
-    async def _ensure_sets_seeded(self) -> None:
+    async def _sync_sets_from_csv(self) -> None:
         if not SETS_CSV_PATH.exists():
             return
 
-        async with self.session_factory() as session:
-            async with session.begin():
-                total_sets = await session.scalar(select(func.count(Set.set_nr)))
-                if total_sets and total_sets > 0:
-                    return
-                await self._import_sets_from_csv(session, SETS_CSV_PATH)
-
-    async def _import_sets_from_csv(self, session: AsyncSession, path: Path) -> None:
-        with path.open("r", encoding="utf-8") as fh:
+        with SETS_CSV_PATH.open("r", encoding="utf-8") as fh:
             reader = csv.DictReader(fh, delimiter=";")
             rows = list(reader)
 
-        for row in rows:
-            set_nr = (row.get("SetNr") or "").strip()
-            if not set_nr:
-                continue
+        async with self.session_factory() as session:
+            async with session.begin():
+                existing = {
+                    set_obj.set_nr: set_obj
+                    for set_obj in (await session.execute(select(Set))).scalars().all()
+                }
 
-            name = (row.get("Name") or "").strip()
-            uvp_cents = _parse_price_to_cents(row.get("UVP_EUR"))
-            release_date = _parse_release_date(row.get("Erscheinungsdatum"))
-            parts = _parse_int(row.get("Teile"))
-            category = _clean_text(row.get("Kategorie"))
-            era = _clean_text(row.get("Ära"))
-            series = _clean_text(row.get("Serie_Film"))
-            features = _clean_text(row.get("Besonderheiten"))
+                for row in rows:
+                    set_nr = (row.get("SetNr") or "").strip()
+                    if not set_nr:
+                        continue
 
-            session.add(
-                Set(
-                    set_nr=set_nr,
-                    name=name,
-                    uvp_cents=uvp_cents,
-                    release_date=release_date,
-                    parts=parts,
-                    category=category,
-                    era=era,
-                    series=series,
-                    features=features,
-                )
-            )
+                    name = (row.get("Name") or "").strip()
+                    uvp_cents = _parse_price_to_cents(row.get("UVP_EUR"))
+                    release_date = _parse_release_date(row.get("Erscheinungsdatum"))
+                    parts = _parse_int(row.get("Teile"))
+                    category = _clean_text(row.get("Kategorie"))
+                    era = _clean_text(row.get("Ära"))
+                    series = _clean_text(row.get("Serie_Film"))
+                    features = _clean_text(row.get("Besonderheiten"))
+
+                    record = existing.get(set_nr)
+                    if record is None:
+                        session.add(
+                            Set(
+                                set_nr=set_nr,
+                                name=name,
+                                uvp_cents=uvp_cents,
+                                release_date=release_date,
+                                parts=parts,
+                                category=category,
+                                era=era,
+                                series=series,
+                                features=features,
+                            )
+                        )
+                        continue
+
+                    updates: Dict[str, Any] = {}
+                    if record.name != name:
+                        updates["name"] = name
+                    if record.uvp_cents != uvp_cents:
+                        updates["uvp_cents"] = uvp_cents
+                    if record.release_date != release_date:
+                        updates["release_date"] = release_date
+                    if record.parts != parts:
+                        updates["parts"] = parts
+                    if record.category != category:
+                        updates["category"] = category
+                    if record.era != era:
+                        updates["era"] = era
+                    if record.series != series:
+                        updates["series"] = series
+                    if record.features != features:
+                        updates["features"] = features
+
+                    if updates:
+                        for attr, value in updates.items():
+                            setattr(record, attr, value)
 
     async def assign_manual_set(self, item_id: int, set_nr: str) -> None:
         async with self.session_factory() as session:

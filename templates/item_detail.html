@@ -56,51 +56,90 @@
             </button>
             <div class="set-panel-inner rounded-2xl border border-white/10 bg-panel p-6 shadow-xl shadow-black/30">
                 <div class="flex items-start justify-between gap-3">
-                    <h2 class="text-lg font-semibold text-white">Set-Zuordnung</h2>
+                    <h2 class="text-lg font-semibold text-white">Set-Zuordnung</h2><div class="flex items-center gap-2"><!-- Listing verbergen / einblenden -->
                     <form method="post" action="/items/{{ item.id }}/toggle_hidden" class="inline-flex">
                         {% if item.hidden %}
                             <input type="hidden" name="hide" value="0">
-                            <button type="submit" class="rounded-xl border border-white/10 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-brand/40 hover:text-brand">Listing einblenden</button>
+                            <button type="submit" class="icon-btn" title="Listing einblenden" aria-label="Listing einblenden">
+                                <!-- Auge (sichtbar) -->
+                                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/>
+                                    <circle cx="12" cy="12" r="3"/>
+                                </svg>
+                            </button>
                         {% else %}
                             <input type="hidden" name="hide" value="1">
-                            <button type="submit" class="rounded-xl border border-white/10 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-brand/40 hover:text-brand">Listing verbergen</button>
+                            <button type="submit" class="icon-btn" title="Listing verbergen" aria-label="Listing verbergen">
+                                <!-- Auge durchgestrichen -->
+                                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M3 3l18 18"/>
+                                    <path d="M10.58 10.58a3 3 0 104.24 4.24"/>
+                                    <path d="M16.88 13.88C15.5 15.26 13.86 16 12 16 5 16 1 12 1 12a17.7 17.7 0 014.62-4.18"/>
+                                    <path d="M17.94 5.94A17.7 17.7 0 0123 12s-4 4-11 4"/>
+                                </svg>
+                            </button>
                         {% endif %}
-                    </form>
+                    </form></div>
+                    <!-- Buttonleiste: Icons + Tooltips -->
+                    
                 </div>
-                <div class="mt-3 flex flex-wrap items-center gap-2">
-                    <button type="button" id="suggestSetButton" data-item-id="{{ item.id }}" class="inline-flex items-center gap-2 rounded-xl border border-brand/40 bg-brand/10 px-3 py-1.5 text-xs font-semibold text-brand transition hover:bg-brand/20">
-                        ✨ Set-Vorschlag
+                <div class="flex items-center gap-2">
+                    
+
+                    <!-- Set-Vorschlag (Icon-only) -->
+                    <button type="button" id="suggestSetButton" data-item-id="{{ item.id }}" class="icon-btn" title="Set-Vorschlag" aria-label="Set-Vorschlag">
+                        ✨
                     </button>
+
+                    <!-- Zuordnung entfernen (nur wenn gesetzt) -->
+                    {% if item.set %}
+                    <form method="post" action="/items/{{ item.id }}/clear_set" class="inline-flex">
+                        <button type="submit" class="icon-btn" title="Zuordnung entfernen" aria-label="Zuordnung entfernen">
+                            <!-- Kette gebrochen (unlink) -->
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M10.5 13.5l-2 2a3 3 0 104.24 4.24l2-2"/>
+                                <path d="M13.5 10.5l2-2a3 3 0 10-4.24-4.24l-2 2"/>
+                                <path d="M14 10l-4 4"/>
+                            </svg>
+                        </button>
+                    </form>
+                    {% endif %}
                 </div>
+                <!-- Entfernt: alter Set-Vorschlag-Block unter dem Header -->
+
                 <form method="post" action="/items/{{ item.id }}/assign_set" class="mt-4 flex flex-col gap-2 text-sm text-slate-300">
                     <label class="text-xs uppercase tracking-wide text-slate-500" for="setPickerTrigger">Set auswählen</label>
-                    <div class="set-select-wrapper" data-enhanced="false" data-expanded="false">
-                        <select name="set_nr" id="setSelect" class="set-select-native min-w-[220px] rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40" required>
-                        {% for option in set_options %}
-                            <option value="{{ option.nr }}" {% if item.set and item.set.nr == option.nr %}selected{% endif %}>{{ option.nr }}{% if option.name %} – {{ option.name }}{% endif %}</option>
-                        {% endfor %}
-                        </select>
-                        <div class="set-picker" aria-hidden="true">
-                            <button type="button" id="setPickerTrigger" class="set-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
-                                <span id="setPickerLabel">Set wählen</span>
-                                <span class="set-picker-caret">▾</span>
-                            </button>
-                            <div class="set-picker-popover" role="listbox" aria-labelledby="setPickerTrigger" data-visible="false">
-                                <div class="set-picker-search">
-                                    <input id="setFilter" type="text" class="set-picker-input" placeholder="Set-Nr oder Name filtern" autocomplete="off" spellcheck="false">
+                    <div class="flex items-center gap-2">
+                        <div class="set-select-wrapper grow" data-enhanced="false" data-expanded="false">
+                            <select name="set_nr" id="setSelect" class="set-select-native min-w-[220px] rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40" required>
+                            {% for option in set_options %}
+                                <option value="{{ option.nr }}" {% if item.set and item.set.nr == option.nr %}selected{% endif %}>{{ option.nr }}{% if option.name %} – {{ option.name }}{% endif %}</option>
+                            {% endfor %}
+                            </select>
+                            <div class="set-picker" aria-hidden="true">
+                                <button type="button" id="setPickerTrigger" class="set-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+                                    <span id="setPickerLabel">Set wählen</span>
+                                    <span class="set-picker-caret">▾</span>
+                                </button>
+                                <div class="set-picker-popover" role="listbox" aria-labelledby="setPickerTrigger" data-visible="false">
+                                    <div class="set-picker-search">
+                                        <input id="setFilter" type="text" class="set-picker-input" placeholder="Set-Nr oder Name filtern" autocomplete="off" spellcheck="false">
+                                    </div>
+                                    <ul id="setPickerList" class="set-picker-options"></ul>
+                                    <div class="set-picker-empty" hidden>Keine Treffer</div>
                                 </div>
-                                <ul id="setPickerList" class="set-picker-options"></ul>
-                                <div class="set-picker-empty" hidden>Keine Treffer</div>
                             </div>
                         </div>
+                        <!-- Set zuordnen: Icon-Button direkt rechts neben dem Dropdown -->
+                        <button type="submit" class="icon-btn" title="Set zuordnen" aria-label="Set zuordnen">
+                            <!-- Plus-Kreis -->
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <circle cx="12" cy="12" r="9"/>
+                                <path d="M12 8v8M8 12h8"/>
+                            </svg>
+                        </button>
                     </div>
-                    <button type="submit" class="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-black shadow shadow-brand/40 transition hover:bg-sky-400">Set manuell zuordnen</button>
                 </form>
-                {% if item.set %}
-                    <form method="post" action="/items/{{ item.id }}/clear_set" class="mt-3 flex items-center">
-                        <button type="submit" class="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:border-red-400 hover:text-red-300">Zuordnung entfernen</button>
-                    </form>
-                {% endif %}
             </div>
         </div>
     </section>

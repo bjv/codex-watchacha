@@ -22,6 +22,15 @@ searches:
     providers:
       - ebay
       - kleinanzeigen
+  - name: Ultra Dringend
+    terms:
+      - rare
+      - limited edition
+    tags:
+      - ultra
+    interval_seconds: 30
+    providers:
+      - ebay
   - name: Generische Suche
     terms:
       - bluebrixx
