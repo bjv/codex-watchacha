@@ -1,4 +1,4 @@
-import asyncio, html, re, sys, time, urllib.parse
+import asyncio, html, json, re, sys, time, urllib.parse
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Callable, Optional
@@ -7,7 +7,7 @@ import yaml, httpx
 
 from rapidfuzz import fuzz, process
 
-from db import Database, SetMatchPayload, SetRecord
+from db import Database, SetMatchPayload, SetPriceInsights, SetRecord
 from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 
 # =========================
@@ -21,6 +21,8 @@ PARTS_RE        = re.compile(r"(\d{2,4})\s*(teile|piece|pieces|pcs|stk|stück)",
 REQUEST_FAIL_IGNORES = ("liberty-metrics", "frontend-metrics", "googlesyndication", "organic-ad-tracking","googletagmanager","9S5VSJJQL24zcSOuuJ")
 
 ULTRA_PRIORITY_TAGS = {"ultra", "ultra-power-prio"}
+
+TELEGRAM_STATE_PATH = Path("artifacts/telegram_state.json")
 
 
 def parse_eur(text: str) -> Tuple[Optional[int], str]:
@@ -260,17 +262,209 @@ async def notify(cfg: dict, title: str, msg: str, link: str):
     await notify_telegram(cfg, title, msg, link)
 
 
+class TelegramCommandProcessor:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+        self.state_path = TELEGRAM_STATE_PATH
+        self._task: Optional[asyncio.Task] = None
+        self._client: Optional[httpx.AsyncClient] = None
+        self._lock = asyncio.Lock()
+        self._stop_event: Optional[asyncio.Event] = None
+        self._cfg: Dict[str, Any] = {}
+        self._last_update_id = self._load_state()
+
+    async def update_config(self, cfg: Dict[str, Any]) -> None:
+        async with self._lock:
+            sanitized_cfg = cfg or {}
+            should_run = bool(sanitized_cfg.get("enabled")) and sanitized_cfg.get("bot_token") and sanitized_cfg.get("chat_id")
+            if not should_run:
+                await self._stop_locked()
+                self._cfg = {}
+                return
+
+            if self._cfg == sanitized_cfg and self._task and not self._task.done():
+                return
+
+            await self._stop_locked()
+            self._cfg = sanitized_cfg
+            self._stop_event = asyncio.Event()
+            self._client = httpx.AsyncClient(timeout=20)
+            self._task = asyncio.create_task(self._run_loop())
+
+    async def stop(self) -> None:
+        async with self._lock:
+            await self._stop_locked()
+
+    async def _stop_locked(self) -> None:
+        if self._stop_event is not None:
+            self._stop_event.set()
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                print(f"[tg-loop] stopped with error: {exc}")
+        self._task = None
+        if self._client is not None:
+            await self._client.aclose()
+        self._client = None
+        self._stop_event = None
+
+    def _load_state(self) -> Optional[int]:
+        try:
+            data = json.loads(self.state_path.read_text())
+            value = data.get("last_update_id")
+            if isinstance(value, int):
+                return value
+        except FileNotFoundError:
+            return None
+        except Exception as exc:
+            print(f"[tg-loop] failed to load state: {exc}")
+        return None
+
+    def _save_state(self) -> None:
+        if self._last_update_id is None:
+            return
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(json.dumps({"last_update_id": self._last_update_id}))
+        except Exception as exc:
+            print(f"[tg-loop] failed to persist state: {exc}")
+
+    async def _run_loop(self) -> None:
+        assert self._client is not None
+        token = self._cfg.get("bot_token")
+        chat_id = str(self._cfg.get("chat_id"))
+        allowed_users_raw = self._cfg.get("allowed_user_ids") or []
+        allowed_users = {int(uid) for uid in allowed_users_raw if str(uid).isdigit()}
+        base_url = f"https://api.telegram.org/bot{token}"
+
+        while self._stop_event and not self._stop_event.is_set():
+            params = {"timeout": 25}
+            if self._last_update_id is not None:
+                params["offset"] = self._last_update_id + 1
+            try:
+                response = await self._client.get(f"{base_url}/getUpdates", params=params)
+                response.raise_for_status()
+                payload = response.json()
+            except Exception as exc:
+                print(f"[tg-loop] getUpdates failed: {exc}")
+                await asyncio.sleep(3)
+                continue
+
+            results = payload.get("result") or []
+            for update in results:
+                update_id = update.get("update_id")
+                if isinstance(update_id, int):
+                    if self._last_update_id is None or update_id > self._last_update_id:
+                        self._last_update_id = update_id
+                await self._handle_update(update, chat_id, allowed_users, base_url)
+            if results:
+                self._save_state()
+
+        self._save_state()
+
+    async def _handle_update(
+        self,
+        update: Dict[str, Any],
+        expected_chat_id: str,
+        allowed_users: set,
+        base_url: str,
+    ) -> None:
+        message = update.get("message") or update.get("edited_message")
+        if not message:
+            return
+        chat = message.get("chat") or {}
+        chat_id = str(chat.get("id")) if chat.get("id") is not None else None
+        if chat_id != expected_chat_id:
+            return
+        user = message.get("from") or {}
+        user_id = user.get("id")
+        if allowed_users and (user_id not in allowed_users):
+            return
+
+        text = (message.get("text") or "").strip()
+        if not text:
+            return
+        if text.startswith("/set"):
+            await self._handle_set_command(text, base_url, chat_id)
+        elif text.startswith("/clear"):
+            await self._handle_clear_command(text, base_url, chat_id)
+
+    async def _handle_set_command(self, text: str, base_url: str, chat_id: str) -> None:
+        parts = text.split()
+        if len(parts) < 4:
+            await self._send_message(base_url, chat_id, "Usage: /set <provider> <listing-id> <set-nr>")
+            return
+        provider_key, listing_id, set_nr = parts[1], parts[2], parts[3]
+        try:
+            item_id = await self.database.assign_manual_set_by_provider(provider_key, listing_id, set_nr)
+            set_record = await self.database.fetch_set_record(set_nr)
+            set_name = set_record.name if set_record else set_nr
+            await self._send_message(
+                base_url,
+                chat_id,
+                f"✅ Set {set_nr} ({set_name}) zugeordnet zu {provider_key} {listing_id} (Item #{item_id})",
+            )
+        except ValueError as exc:
+            await self._send_message(base_url, chat_id, f"⚠️ {exc}")
+        except Exception as exc:
+            await self._send_message(base_url, chat_id, f"❌ Fehler: {exc}")
+
+    async def _handle_clear_command(self, text: str, base_url: str, chat_id: str) -> None:
+        parts = text.split()
+        if len(parts) < 3:
+            await self._send_message(base_url, chat_id, "Usage: /clear <provider> <listing-id>")
+            return
+        provider_key, listing_id = parts[1], parts[2]
+        try:
+            item_id = await self.database.clear_set_match_by_provider(provider_key, listing_id)
+            await self._send_message(
+                base_url,
+                chat_id,
+                f"✅ Zuordnung entfernt für {provider_key} {listing_id} (Item #{item_id})",
+            )
+        except ValueError as exc:
+            await self._send_message(base_url, chat_id, f"⚠️ {exc}")
+        except Exception as exc:
+            await self._send_message(base_url, chat_id, f"❌ Fehler: {exc}")
+
+    async def _send_message(self, base_url: str, chat_id: str, text: str) -> None:
+        if self._client is None:
+            return
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+        }
+        try:
+            response = await self._client.post(f"{base_url}/sendMessage", json=payload)
+            if response.status_code >= 400:
+                print(f"[tg-loop] sendMessage failed {response.status_code}: {response.text[:200]}")
+        except Exception as exc:
+            print(f"[tg-loop] sendMessage error: {exc}")
+
+
 def build_notification_payload(
+    provider_key: str,
     provider_label: str,
     search_name: str,
     item: Dict[str, Any],
     *,
     is_ultra: bool = False,
+    price_insights: Optional[SetPriceInsights] = None,
 ) -> Tuple[str, str]:
     match: Optional[SetMatchPayload] = item.get("set_match_info")
 
     def esc(value: str) -> str:
         return html.escape(value, quote=False)
+
+    def fmt_eur(cents: Optional[int]) -> str:
+        if cents is None:
+            return "k. A."
+        value = Decimal(cents) / Decimal(100)
+        return f"{value:.2f} €"
 
     listing_title = item.get("title") or ""
     bid_display = item.get("bid") or "-"
@@ -317,6 +511,34 @@ def build_notification_payload(
     else:
         id_line = "ID: –"
     lines.append(id_line)
+
+    insights = price_insights if match and price_insights and price_insights.set_nr == match.set_nr else None
+    recent_sales = insights.recent_sales if insights else []
+    if recent_sales:
+        sales_line = " · ".join(fmt_eur(value) for value in recent_sales)
+    else:
+        sales_line = "k. A."
+    lines.append(f"Verkauf: {esc(sales_line)}")
+
+    for key in ("ebay", "kleinanzeigen"):
+        label = PROVIDERS.get(key, {}).get("label", key.title())
+        range_info = insights.provider_ranges.get(key) if insights else None
+        if range_info and range_info.min_cents is not None and range_info.max_cents is not None:
+            if range_info.min_cents == range_info.max_cents:
+                range_text = fmt_eur(range_info.min_cents)
+            else:
+                range_text = f"{fmt_eur(range_info.min_cents)}–{fmt_eur(range_info.max_cents)}"
+            detail = f"{range_text} ({range_info.count})"
+        else:
+            detail = "k. A."
+        lines.append(f"{esc(label)} aktiv: {esc(detail)}")
+
+    if listing_id_raw:
+        lines.append(f"Ref: {esc(provider_key)} {esc(listing_id_raw)}")
+        if match:
+            lines.append(f"Cmd: /set {esc(provider_key)} {esc(listing_id_raw)} {esc(match.set_nr)}")
+        else:
+            lines.append(f"Cmd: /set {esc(provider_key)} {esc(listing_id_raw)} <set-nr>")
 
     return title, "\n".join(lines)
 
@@ -788,11 +1010,20 @@ async def execute_search(
         if new_items:
             for it in new_items:
                 provider_label = PROVIDERS[provider_key]["label"]
+                match_info: Optional[SetMatchPayload] = it.get("set_match_info")
+                insights: Optional[SetPriceInsights] = None
+                if match_info and match_info.above_threshold:
+                    try:
+                        insights = await database.fetch_set_price_insights(match_info.set_nr)
+                    except Exception as exc:
+                        print(f"{prefix}: [db] fetch_set_price_insights failed for {match_info.set_nr}: {exc}")
                 title, msg = build_notification_payload(
+                    provider_key,
                     provider_label,
                     name,
                     it,
                     is_ultra=is_ultra,
+                    price_insights=insights,
                 )
                 gk = make_round_key(provider_key, it)
                 if reported_keys is not None and gk in reported_keys:
@@ -918,6 +1149,8 @@ async def main():
     shared_state = SharedState()
     shared_state.cfg = cfg
 
+    telegram_processor = TelegramCommandProcessor(database)
+
     try:
         async with async_playwright() as p:
             # initiale Config nur für Browser-Start (headless/devtools)
@@ -943,6 +1176,7 @@ async def main():
                         print(f"[warn] config reload failed: {e} (verwende letzte gültige)")
 
                     shared_state.cfg = cfg
+                    await telegram_processor.update_config(cfg.get("telegram") or {})
 
                     set_records = await database.fetch_set_records()
                     matcher = SetMatcher(set_records)
@@ -999,6 +1233,7 @@ async def main():
                     await asyncio.gather(*priority_tasks.values(), return_exceptions=True)
                 await browser.close()
     finally:
+        await telegram_processor.stop()
         await database.dispose()
 
 

@@ -11,6 +11,7 @@ telegram:
   bot_token: ""
   chat_id: ""
   disable_web_page_preview: true
+  allowed_user_ids: []
 
 searches:
   - name: BlueBrixx Klassiker

@@ -200,6 +200,21 @@ class RevisitCandidate:
     settled_price_cents: Optional[int]
 
 
+@dataclass(slots=True)
+class ProviderPriceRange:
+    provider_key: str
+    min_cents: Optional[int]
+    max_cents: Optional[int]
+    count: int
+
+
+@dataclass(slots=True)
+class SetPriceInsights:
+    set_nr: str
+    recent_sales: List[int]
+    provider_ranges: Dict[str, ProviderPriceRange]
+
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -425,6 +440,25 @@ class Database:
                 for s in sets
             ]
 
+    async def fetch_set_record(self, set_nr: str) -> Optional[SetRecord]:
+        if not set_nr:
+            return None
+        async with self.session_factory() as session:
+            set_obj = await session.get(Set, set_nr)
+            if set_obj is None:
+                return None
+            return SetRecord(
+                set_nr=set_obj.set_nr,
+                name=set_obj.name,
+                uvp_cents=set_obj.uvp_cents,
+                release_date=set_obj.release_date,
+                parts=set_obj.parts,
+                category=set_obj.category,
+                era=set_obj.era,
+                series=set_obj.series,
+                features=set_obj.features,
+            )
+
     async def fetch_revisit_candidates(
         self,
         *,
@@ -484,6 +518,60 @@ class Database:
                     )
                 )
             return candidates
+
+    async def fetch_set_price_insights(self, set_nr: str) -> SetPriceInsights:
+        if not set_nr:
+            return SetPriceInsights(set_nr=set_nr, recent_sales=[], provider_ranges={})
+
+        async with self.session_factory() as session:
+            recent_sales_stmt = (
+                select(Snapshot.settled_price_cents)
+                .join(Item, Snapshot.item_id == Item.id)
+                .join(ItemSetMatch, ItemSetMatch.item_id == Item.id)
+                .where(
+                    ItemSetMatch.set_nr == set_nr,
+                    Snapshot.settled_price_cents.is_not(None),
+                    Snapshot.price_origin == "sold_final",
+                )
+                .order_by(Snapshot.observed_ts.desc())
+                .limit(3)
+            )
+            recent_sales_result = await session.execute(recent_sales_stmt)
+            recent_sales = [value for (value,) in recent_sales_result.all() if value is not None]
+
+            price_field = func.coalesce(Item.current_buyout_cents, Item.current_bid_cents)
+            range_stmt = (
+                select(
+                    Item.provider_key,
+                    func.count(Item.id),
+                    func.min(price_field),
+                    func.max(price_field),
+                )
+                .join(ItemSetMatch, ItemSetMatch.item_id == Item.id)
+                .where(
+                    ItemSetMatch.set_nr == set_nr,
+                    Item.hidden.is_(False),
+                    Item.availability == DEFAULT_AVAILABILITY,
+                    price_field.is_not(None),
+                )
+                .group_by(Item.provider_key)
+            )
+            range_result = await session.execute(range_stmt)
+            provider_ranges: Dict[str, ProviderPriceRange] = {}
+            for provider_key, count, min_price, max_price in range_result.all():
+                provider_key_str = str(provider_key)
+                provider_ranges[provider_key_str] = ProviderPriceRange(
+                    provider_key=provider_key_str,
+                    min_cents=int(min_price) if min_price is not None else None,
+                    max_cents=int(max_price) if max_price is not None else None,
+                    count=int(count) if count is not None else 0,
+                )
+
+        return SetPriceInsights(
+            set_nr=set_nr,
+            recent_sales=recent_sales,
+            provider_ranges=provider_ranges,
+        )
 
     async def _ensure_provider(self, session: AsyncSession, provider_key: str, label: str) -> None:
         if provider_key in self._provider_cache:
@@ -725,29 +813,7 @@ class Database:
                 set_obj = await session.get(Set, set_nr)
                 if set_obj is None:
                     raise ValueError("Set not found")
-
-                match = item.set_match
-                if match is None:
-                    match = ItemSetMatch(
-                        item=item,
-                        set=set_obj,
-                        score=1.0,
-                        name_score=1.0,
-                        matched_number=True,
-                        parts_difference=0,
-                        manual_override=True,
-                        original_score=None,
-                    )
-                    session.add(match)
-                else:
-                    if not match.manual_override and match.original_score is None:
-                        match.original_score = match.score
-                    match.set = set_obj
-                    match.score = 1.0
-                    match.name_score = 1.0
-                    match.matched_number = True
-                    match.parts_difference = 0
-                    match.manual_override = True
+                self._apply_manual_set(item, set_obj, session)
 
     async def clear_set_match(self, item_id: int) -> None:
         async with self.session_factory() as session:
@@ -755,6 +821,63 @@ class Database:
                 match = await session.scalar(select(ItemSetMatch).where(ItemSetMatch.item_id == item_id))
                 if match is not None:
                     await session.delete(match)
+
+    async def assign_manual_set_by_provider(self, provider_key: str, provider_item_id: str, set_nr: str) -> int:
+        normalized_provider = (provider_key or "").strip().lower()
+        normalized_listing = (provider_item_id or "").strip()
+        if not normalized_provider or not normalized_listing:
+            raise ValueError("provider key and listing id are required")
+
+        async with self.session_factory() as session:
+            async with session.begin():
+                item = await self._get_item(session, normalized_provider, normalized_listing)
+                if item is None:
+                    raise ValueError("Listing not found")
+                set_obj = await session.get(Set, set_nr)
+                if set_obj is None:
+                    raise ValueError("Set not found")
+                self._apply_manual_set(item, set_obj, session)
+                return int(item.id)
+
+    async def clear_set_match_by_provider(self, provider_key: str, provider_item_id: str) -> int:
+        normalized_provider = (provider_key or "").strip().lower()
+        normalized_listing = (provider_item_id or "").strip()
+        if not normalized_provider or not normalized_listing:
+            raise ValueError("provider key and listing id are required")
+
+        async with self.session_factory() as session:
+            async with session.begin():
+                item = await self._get_item(session, normalized_provider, normalized_listing)
+                if item is None:
+                    raise ValueError("Listing not found")
+                match = await session.scalar(select(ItemSetMatch).where(ItemSetMatch.item_id == item.id))
+                if match is not None:
+                    await session.delete(match)
+                return int(item.id)
+
+    def _apply_manual_set(self, item: Item, set_obj: Set, session: AsyncSession) -> None:
+        match = item.set_match
+        if match is None:
+            match = ItemSetMatch(
+                item=item,
+                set=set_obj,
+                score=1.0,
+                name_score=1.0,
+                matched_number=True,
+                parts_difference=0,
+                manual_override=True,
+                original_score=None,
+            )
+            session.add(match)
+        else:
+            if not match.manual_override and match.original_score is None:
+                match.original_score = match.score
+            match.set = set_obj
+            match.score = 1.0
+            match.name_score = 1.0
+            match.matched_number = True
+            match.parts_difference = 0
+            match.manual_override = True
 
     async def set_item_hidden(self, item_id: int, hidden: bool) -> None:
         async with self.session_factory() as session:

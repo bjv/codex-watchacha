@@ -52,14 +52,17 @@ async def _run(config_path: Path) -> None:
     cfg = yaml.safe_load(config_path.read_text()) or {}
 
     item = _default_item()
+    provider_key = "test"
     provider_label = "TEST"
     search_name = "Ultra Test Alert"
 
     title, msg = build_notification_payload(
+        provider_key,
         provider_label,
         search_name,
         item,
         is_ultra=True,
+        price_insights=None,
     )
 
     await notify(cfg, title, msg, item["href"])
