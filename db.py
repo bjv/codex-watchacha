@@ -27,6 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base, relationship, selectinload
 from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.dialects.postgresql import insert
 
 
 Base = declarative_base()
@@ -392,25 +393,32 @@ class Database:
                 snapshot_created = is_new or (last_fingerprint != fp and bool(changed_fields))
 
                 if snapshot_created:
-                    snapshot = Snapshot(
-                        item_id=item.id,
-                        observed_ts=now,
-                        bid_cents=payload.get("bid_cents"),
-                        buyout_cents=payload.get("buyout_cents"),
-                        direct_buy=bool(payload.get("direct_buy")),
-                        vb_flag=bool(payload.get("vb_flag")),
-                        listing_type=listing_type,
-                        shipping_cents=shipping_cents,
-                        shipping_note=shipping_note,
-                        price_origin=price_origin_payload,
-                        settled_price_cents=settled_price_cents_payload,
-                        availability=availability,
-                        source=snapshot_source,
-                        note=snapshot_note,
-                        title=payload["title"],
-                        fingerprint=fp,
+                    snapshot_values = {
+                        "item_id": item.id,
+                        "observed_ts": now,
+                        "bid_cents": payload.get("bid_cents"),
+                        "buyout_cents": payload.get("buyout_cents"),
+                        "direct_buy": bool(payload.get("direct_buy")),
+                        "vb_flag": bool(payload.get("vb_flag")),
+                        "listing_type": listing_type,
+                        "shipping_cents": shipping_cents,
+                        "shipping_note": shipping_note,
+                        "price_origin": price_origin_payload,
+                        "settled_price_cents": settled_price_cents_payload,
+                        "availability": availability,
+                        "source": snapshot_source,
+                        "note": snapshot_note,
+                        "title": payload["title"],
+                        "fingerprint": fp,
+                    }
+                    insert_stmt = (
+                        insert(Snapshot)
+                        .values(**snapshot_values)
+                        .on_conflict_do_nothing(index_elements=["item_id", "fingerprint"])
                     )
-                    session.add(snapshot)
+                    result = await session.execute(insert_stmt)
+                    if result.rowcount == 0:
+                        snapshot_created = False
 
             # session.commit() handled by context manager
 
@@ -715,26 +723,31 @@ class Database:
                 if last_fingerprint == fp:
                     return False
 
-                snapshot = Snapshot(
-                    item_id=item.id,
-                    observed_ts=observed,
-                    bid_cents=item.current_bid_cents,
-                    buyout_cents=item.current_buyout_cents,
-                    direct_buy=item.direct_buy,
-                    vb_flag=item.vb_flag,
-                    listing_type=item.listing_type,
-                    shipping_cents=item.shipping_cents,
-                    shipping_note=item.shipping_note,
-                    price_origin=item.price_origin,
-                    settled_price_cents=item.settled_price_cents,
-                    availability=normalized_availability,
-                    source=source,
-                    note=note,
-                    title=item.title,
-                    fingerprint=fp,
+                snapshot_values = {
+                    "item_id": item.id,
+                    "observed_ts": observed,
+                    "bid_cents": item.current_bid_cents,
+                    "buyout_cents": item.current_buyout_cents,
+                    "direct_buy": item.direct_buy,
+                    "vb_flag": item.vb_flag,
+                    "listing_type": item.listing_type,
+                    "shipping_cents": item.shipping_cents,
+                    "shipping_note": item.shipping_note,
+                    "price_origin": item.price_origin,
+                    "settled_price_cents": item.settled_price_cents,
+                    "availability": normalized_availability,
+                    "source": source,
+                    "note": note,
+                    "title": item.title,
+                    "fingerprint": fp,
+                }
+                insert_stmt = (
+                    insert(Snapshot)
+                    .values(**snapshot_values)
+                    .on_conflict_do_nothing(index_elements=["item_id", "fingerprint"])
                 )
-                session.add(snapshot)
-                return True
+                result = await session.execute(insert_stmt)
+                return result.rowcount > 0
 
     async def _sync_sets_from_csv(self) -> None:
         if not SETS_CSV_PATH.exists():
