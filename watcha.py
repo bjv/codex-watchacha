@@ -20,6 +20,11 @@ SET_NR_RE       = re.compile(r"\b\d{5,6}\b")
 PARTS_RE        = re.compile(r"(\d{2,4})\s*(teile|piece|pieces|pcs|stk|stück)", re.IGNORECASE)
 REQUEST_FAIL_IGNORES = ("liberty-metrics", "frontend-metrics", "googlesyndication", "organic-ad-tracking","googletagmanager","9S5VSJJQL24zcSOuuJ")
 
+TITLE_SUFFIX_PATTERNS = [
+    re.compile(r"\s*Wird in neuem Fenster oder Tab geöffnet\s*$", re.IGNORECASE),
+    re.compile(r"\s*Opens in a new window or tab\s*$", re.IGNORECASE),
+]
+
 ULTRA_PRIORITY_TAGS = {"ultra", "ultra-power-prio"}
 
 TELEGRAM_STATE_PATH = Path("artifacts/telegram_state.json")
@@ -82,6 +87,18 @@ def normalize_text(text: str) -> str:
     lowered = text.lower().translate(TRANSLATION_TABLE)
     lowered = re.sub(r"[^a-z0-9\s]", " ", lowered)
     return re.sub(r"\s+", " ", lowered).strip()
+
+
+def sanitize_listing_title(title: str) -> str:
+    if not title:
+        return ""
+
+    cleaned = title.replace("\xa0", " ")
+    for pattern in TITLE_SUFFIX_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
+
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
 
 
 def extract_set_numbers(text: str) -> List[str]:
@@ -611,7 +628,8 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
         if not m:
             continue
         item_id = m.group("id")
-        title = (await a.text_content()) or ""
+        title_raw = (await a.text_content()) or ""
+        title = sanitize_listing_title(title_raw)
         li = await a.evaluate_handle("el => el.closest('li') || el.parentElement")
 
         bid_price = ""
@@ -763,7 +781,7 @@ async def ebay_parse_results(page) -> List[Dict[str, Any]]:
 
         out.append({
             "id": item_id,
-            "title": title.strip(),
+            "title": title,
             "href": href.split("?")[0],
             "bid": bid_price,
             "bid_cents": bid_cents,
@@ -818,7 +836,8 @@ async def ka_parse_results(page) -> List[Dict[str, Any]]:
 
         href = "https://www.kleinanzeigen.de" + href_rel if href_rel.startswith("/") else href_rel
         title_el = await card.query_selector("h2 a")
-        title = ((await title_el.text_content()) or "").strip() if title_el else ""
+        title_raw = ((await title_el.text_content()) or "").strip() if title_el else ""
+        title = sanitize_listing_title(title_raw)
 
         price_el = await card.query_selector(".aditem-main--middle--price-shipping--price")
         price_txt = ((await price_el.text_content()) or "").replace(" ", " ").strip() if price_el else ""
